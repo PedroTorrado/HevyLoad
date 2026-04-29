@@ -1,0 +1,131 @@
+{
+  "welcome": "Bem-vindo ao HevyLoad",
+  "common": {
+    "start": "Começar",
+    "signin": "Entrar",
+    "signup": "Criar Conta",
+    "signout": "Sair",
+    "settings": "Definições",
+    "loading": "A carregar...",
+    "save": "Guardar",
+    "cancel": "Cancelar",
+    "success": "Sucesso",
+    "home": "Início",
+    "areYouSure": "Tem a certeza?",
+    "delete": "Apagar"
+  },
+  "auth": {
+    "welcome": {
+      "title": "Bem-vindo ao HevyLoad",
+      "subtitle": "Analise o seu histórico de treinos do Hevy com estatísticas detalhadas.",
+      "signin": "Entrar",
+      "signup": "Criar Conta"
+    },
+    "signin": {
+      "title": "Bem-vindo de volta",
+      "subtitle": "Inicie sessão para acompanhar o seu progresso",
+      "email": "Endereço de E-mail",
+      "password": "Palavra-passe",
+      "forgot": "Esqueceu-se da palavra-passe?",
+      "action": "Entrar",
+      "footer": "Não tem uma conta?",
+      "footerAction": "Registe-se",
+      "invalidEmail": "Por favor, introduza um endereço de e-mail válido."
+    },
+    "signup": {
+      "title": "Junte-se ao HevyLoad",
+      "subtitle": "Comece a analisar os seus treinos",
+      "fullName": "Nome Completo",
+      "email": "Endereço de E-mail",
+      "password": "Palavra-passe",
+      "dob": "Data de Nascimento (DD/MM/AAAA)",
+      "action": "Criar Conta",
+      "footer": "Já tem uma conta?",
+      "footerAction": "Entrar",
+      "cameraPermissionError": "É necessária permissão para a câmara."
+    },
+    "forgot_password": {
+      "title": "Redefinir Palavra-passe",
+      "subtitle": "Introduza o seu e-mail e enviaremos um link de redefinição.",
+      "action": "Enviar Link de Redefinição",
+      "success": "Verifique o seu e-mail para o link de redefinição!",
+      "back_to_signin": "← Voltar ao Iniciar Sessão"
+    },
+    "passwordMismatch": "As palavras-passe não coincidem.",
+    "passwordUpdated": "Palavra-passe atualizada com sucesso."
+  },
+  "app": {
+    "dashboard": {
+      "greeting_morning": "Bom dia",
+      "greeting_afternoon": "Boa tarde",
+      "greeting_evening": "Boa noite",
+      "stats": {
+        "workouts": "Treinos",
+        "volume": "Volume Total",
+        "this_week": "Esta Semana"
+      },
+      "import_card": {
+        "title": "Importe os Seus Dados",
+        "subtitle": "Carregue o CSV do Hevy para ver o seu progresso.",
+        "action": "Importar Agora"
+      },
+      "sections": {
+        "recent_workouts": "Treinos Recentes",
+        "quick_actions": "Ações Rápidas"
+      },
+      "modules": {
+        "analytics": {
+          "title": "Análise",
+          "desc": "Mergulhe nas estatísticas dos seus treinos."
+        },
+        "exercises": {
+          "title": "Exercícios",
+          "desc": "Veja o histórico de movimentos específicos."
+        },
+        "history": {
+          "title": "Histórico Completo",
+          "desc": "Navegue por todas as sessões registadas."
+        }
+      }
+    },
+    "history": {
+      "title": "Histórico",
+      "default_title": "Treino",
+      "no_workouts": "Nenhum treino encontrado para este mês."
+    },
+    "workout": {
+      "not_found": "Treino não encontrado",
+      "default_title": "Detalhes do Treino",
+      "start": "Início",
+      "set": "Série",
+      "weight": "Peso",
+      "reps": "Reps"
+    },
+    "exercises": {
+      "title": "Exercícios",
+      "no_muscle_group": "Corpo Inteiro",
+      "search_placeholder": "Procurar exercícios...",
+      "no_results": "Nenhum exercício encontrado.",
+      "no_exercises": "Nenhum exercício encontrado. Importe os seus dados para vê-los aqui."
+    },
+    "profile": {
+      "title": "Perfil",
+      "language": "Idioma",
+      "theme": "Tema do App",
+      "theme_auto": "Auto",
+      "theme_light": "Claro",
+      "theme_dark": "Escuro",
+      "logout": "Sair",
+      "personalInfo": "Informação Pessoal",
+      "name": "Nome Completo",
+      "email": "Endereço de E-mail",
+      "dob": "Data de Nascimento",
+      "changePhoto": "Alterar Foto",
+      "chooseSource": "Escolha uma fonte",
+      "camera": "Câmara",
+      "gallery": "Galeria",
+      "deleteAccount": "Apagar Conta",
+      "deleteAccountConfirm": "Isto irá apagar permanentemente a sua conta. Esta ação não pode ser desfeita."
+    }
+  }
+}

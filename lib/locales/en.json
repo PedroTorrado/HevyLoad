@@ -1,0 +1,131 @@
+{
+  "welcome": "Welcome to HevyLoad",
+  "common": {
+    "start": "Start",
+    "signin": "Sign In",
+    "signup": "Sign Up",
+    "signout": "Sign Out",
+    "settings": "Settings",
+    "loading": "Loading...",
+    "save": "Save",
+    "cancel": "Cancel",
+    "success": "Success",
+    "home": "Home",
+    "areYouSure": "Are you sure?",
+    "delete": "Delete"
+  },
+  "auth": {
+    "welcome": {
+      "title": "Welcome to HevyLoad",
+      "subtitle": "Analyze your workout history from Hevy with deep insights.",
+      "signin": "Sign In",
+      "signup": "Create Account"
+    },
+    "signin": {
+      "title": "Welcome back",
+      "subtitle": "Sign in to track your progress",
+      "email": "Email Address",
+      "password": "Password",
+      "forgot": "Forgot Password?",
+      "action": "Sign In",
+      "footer": "Don't have an account?",
+      "footerAction": "Sign Up",
+      "invalidEmail": "Please enter a valid email address."
+    },
+    "signup": {
+      "title": "Join HevyLoad",
+      "subtitle": "Start analyzing your lifts",
+      "fullName": "Full Name",
+      "email": "Email Address",
+      "password": "Password",
+      "dob": "Date of Birth (DD/MM/YYYY)",
+      "action": "Create Account",
+      "footer": "Already have an account?",
+      "footerAction": "Sign In",
+      "cameraPermissionError": "Camera permission is required."
+    },
+    "forgot_password": {
+      "title": "Reset Password",
+      "subtitle": "Enter your email and we'll send you a reset link.",
+      "action": "Send Reset Link",
+      "success": "Check your email for a reset link!",
+      "back_to_signin": "← Back to Sign In"
+    },
+    "passwordMismatch": "Passwords do not match.",
+    "passwordUpdated": "Password updated successfully."
+  },
+  "app": {
+    "dashboard": {
+      "greeting_morning": "Good morning",
+      "greeting_afternoon": "Good afternoon",
+      "greeting_evening": "Good evening",
+      "stats": {
+        "workouts": "Workouts",
+        "volume": "Total Volume",
+        "this_week": "This Week"
+      },
+      "import_card": {
+        "title": "Import Your Data",
+        "subtitle": "Upload your Hevy CSV to see your progress.",
+        "action": "Import Now"
+      },
+      "sections": {
+        "recent_workouts": "Recent Workouts",
+        "quick_actions": "Quick Actions"
+      },
+      "modules": {
+        "analytics": {
+          "title": "Analytics",
+          "desc": "Deep dive into your lifting stats."
+        },
+        "exercises": {
+          "title": "Exercises",
+          "desc": "View history for specific movements."
+        },
+        "history": {
+          "title": "Full History",
+          "desc": "Browse all your logged sessions."
+        }
+      }
+    },
+    "history": {
+      "title": "History",
+      "default_title": "Workout",
+      "no_workouts": "No workouts found for this month."
+    },
+    "workout": {
+      "not_found": "Workout not found",
+      "default_title": "Workout Details",
+      "start": "Start Time",
+      "set": "Set",
+      "weight": "Weight",
+      "reps": "Reps"
+    },
+    "exercises": {
+      "title": "Exercises",
+      "no_muscle_group": "Full Body",
+      "search_placeholder": "Search exercises...",
+      "no_results": "No exercises found matching your search.",
+      "no_exercises": "No exercises found. Import your data to see them here."
+    },
+    "profile": {
+      "title": "Profile",
+      "language": "Language",
+      "theme": "App Theme",
+      "theme_auto": "Auto",
+      "theme_light": "Light",
+      "theme_dark": "Dark",
+      "logout": "Sign Out",
+      "personalInfo": "Personal Information",
+      "name": "Full Name",
+      "email": "Email Address",
+      "dob": "Date of Birth",
+      "changePhoto": "Change Photo",
+      "chooseSource": "Choose a source",
+      "camera": "Camera",
+      "gallery": "Gallery",
+      "deleteAccount": "Delete Account",
+      "deleteAccountConfirm": "This will permanently delete your account. This cannot be undone."
+    }
+  }
+}
