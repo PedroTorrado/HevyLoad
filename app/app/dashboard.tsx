@@ -6,6 +6,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View, Platform, ActivityIndica
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "../../lib/supabase";
 import { useThemeColor } from "../../lib/theme";
+import { usePreferences } from "../../lib/preferences";
 
 export default function Dashboard() {
     const router = useRouter();
@@ -13,6 +14,63 @@ export default function Dashboard() {
     const insets = useSafeAreaInsets();
     const colors = useThemeColor();
     const scheme = useColorScheme();
+    const { plateType } = usePreferences();
+
+    const PlateVisualizer = ({ weight }: { weight: number }) => {
+        const BAR_WEIGHT = 20;
+        const remaining = Math.max(0, weight - BAR_WEIGHT);
+        const sideWeight = remaining / 2;
+
+        const plates: any[] = [];
+        let w = sideWeight;
+
+        const PLATE_CONFIGS = [
+            { weight: 25, color: "#FF3B30", height: 44, width: 8 },
+            { weight: 20, color: "#0A84FF", height: 44, width: 8 },
+            { weight: 15, color: "#FFCC00", height: 38, width: 7 },
+            { weight: 10, color: "#4CD964", height: 32, width: 6 },
+            { weight: 5, color: "#FFFFFF", height: 26, width: 5 },
+            { weight: 2.5, color: "#888888", height: 20, width: 4 },
+            { weight: 1.25, color: "#666666", height: 16, width: 3 },
+        ];
+
+        const availableConfigs = PLATE_CONFIGS.filter(c => {
+            if (plateType === 25 && c.weight === 20) return false;
+            if (plateType === 20 && c.weight === 25) return false;
+            return true;
+        });
+
+        availableConfigs.sort((a, b) => b.weight - a.weight).forEach(config => {
+            const count = Math.floor(w / config.weight);
+            for (let i = 0; i < count; i++) {
+                plates.push(config);
+            }
+            w = Math.round((w - count * config.weight) * 100) / 100;
+        });
+
+        return (
+            <View style={styles.plateVisualizer}>
+                <View style={[styles.barbell, { backgroundColor: colors.border }]} />
+                <View style={styles.platesContainer}>
+                    {plates.slice(0, 8).map((p, i) => (
+                        <View 
+                            key={i} 
+                            style={[
+                                styles.plate, 
+                                { 
+                                    backgroundColor: p.color, 
+                                    height: p.height, 
+                                    width: p.width,
+                                    borderColor: "rgba(0,0,0,0.1)",
+                                    borderWidth: 0.5
+                                }
+                            ]} 
+                        />
+                    ))}
+                </View>
+            </View>
+        );
+    };
     
     // Initialize loading as false to prevent immediate flicker
     const [loading, setLoading] = useState(false);
@@ -52,10 +110,11 @@ export default function Dashboard() {
             if (!user) return;
 
             // 1. Fetch Profile, Workouts, and Exercises
-            const [profileRes, workoutsRes, exercisesRes] = await Promise.all([
+            const [profileRes, workoutsRes, exercisesRes, totalCountRes] = await Promise.all([
                 supabase.from("profiles").select("full_name, avatar_url, featured_exercise_ids").eq("id", user.id).single(),
-                supabase.from("workouts").select("id, start_time, title").eq("user_id", user.id).order("start_time", { ascending: false }),
-                supabase.from("exercises").select("id, name").eq("user_id", user.id)
+                supabase.from("workouts").select("id, start_time, title").eq("user_id", user.id).order("start_time", { ascending: false }).limit(1000),
+                supabase.from("exercises").select("id, name").eq("user_id", user.id),
+                supabase.from("workouts").select("id", { count: 'exact', head: true }).eq("user_id", user.id)
             ]);
 
             if (profileRes.data) {
@@ -67,10 +126,14 @@ export default function Dashboard() {
             if (workoutsRes.data) {
                 const workouts = workoutsRes.data;
                 const now = new Date();
-                const startOfWeek = new Date(now.setDate(now.getDate() - now.getDay()));
+                const day = now.getDay();
+                const diff = now.getDate() - day + (day === 0 ? -6 : 1); // Monday
+                const startOfWeek = new Date(now.setDate(diff));
+                startOfWeek.setHours(0, 0, 0, 0);
+
                 thisWeekCount = workouts.filter(w => new Date(w.start_time) >= startOfWeek).length;
 
-                setStats(prev => ({ ...prev, totalWorkouts: workouts.length, workoutsThisWeek: thisWeekCount }));
+                setStats(prev => ({ ...prev, totalWorkouts: totalCountRes.count || workouts.length, workoutsThisWeek: thisWeekCount }));
                 setRecentWorkouts(workouts.slice(0, 3));
             }
 
@@ -114,57 +177,42 @@ export default function Dashboard() {
                 // 3. Fetch MAX sets for target exercises and ALL sets for volume
                 const targetIdsArray = Array.from(targetExerciseIds);
                 
-                const [targetSetsRes, volumeRes] = await Promise.all([
-                    targetIdsArray.length > 0 
-                        ? supabase.from("sets")
-                            .select("weight_kg, reps, exercise_id")
-                            .eq("user_id", user.id)
-                            .in("exercise_id", targetIdsArray)
-                            .order("weight_kg", { ascending: false })
-                        : Promise.resolve({ data: [] }),
-                    supabase.from("sets")
-                        .select("weight_kg, reps, workouts(start_time)")
-                        .eq("user_id", user.id)
-                ]);
+                // Fetch workouts with their sets to ensure we get user's data correctly
+                const { data: workoutsWithSets } = await supabase
+                    .from("workouts")
+                    .select("id, start_time, sets(weight_kg, reps, exercise_id)")
+                    .eq("user_id", user.id);
 
-                // Calculate Volume & Weekly Tonnage
                 let totalVolume = 0;
                 let weeklyTonnage = 0;
                 const now = new Date();
                 const startOfWeek = new Date(now.setDate(now.getDate() - now.getDay()));
                 startOfWeek.setHours(0, 0, 0, 0);
 
-                if (volumeRes.data) {
-                    volumeRes.data.forEach((set: any) => {
-                        const weight = set.weight_kg || 0;
-                        const reps = set.reps || 0;
-                        const vol = weight * reps;
-                        totalVolume += vol;
-                        
-                        if (set.workouts?.start_time) {
-                            const workoutDate = new Date(set.workouts.start_time);
-                            if (workoutDate >= startOfWeek) {
-                                weeklyTonnage += vol;
-                            }
-                        }
-                    });
-                }
-
-                // Calculate PRs from target sets
                 const exerciseMaxes: Record<string, { name: string, weight: number }> = {};
                 targetIdsArray.forEach(id => {
                     const ex = exercisesRes.data!.find(e => e.id === id);
                     if (ex) exerciseMaxes[id] = { name: ex.name, weight: 0 };
                 });
 
-                if (targetSetsRes.data) {
-                    targetSetsRes.data.forEach(set => {
-                        if (exerciseMaxes[set.exercise_id]) {
+                if (workoutsWithSets) {
+                    workoutsWithSets.forEach(w => {
+                        const workoutDate = new Date(w.start_time);
+                        const isThisWeek = workoutDate >= startOfWeek;
+
+                        w.sets.forEach((set: any) => {
                             const weight = set.weight_kg || 0;
-                            if (weight > exerciseMaxes[set.exercise_id].weight) {
-                                exerciseMaxes[set.exercise_id].weight = weight;
+                            const reps = set.reps || 0;
+                            const vol = weight * reps;
+                            totalVolume += vol;
+                            if (isThisWeek) weeklyTonnage += vol;
+
+                            if (targetExerciseIds.has(set.exercise_id)) {
+                                if (weight > (exerciseMaxes[set.exercise_id]?.weight || 0)) {
+                                    exerciseMaxes[set.exercise_id].weight = weight;
+                                }
                             }
-                        }
+                        });
                     });
                 }
 
@@ -322,6 +370,7 @@ export default function Dashboard() {
                                             </View>
                                             <Text style={[styles.big3Name, { color: colors.secondaryText }]}>{lift.type.toUpperCase()}</Text>
                                             <Text style={[styles.big3Value, { color: colors.text }]}>{lift.value}<Text style={styles.big3Unit}>kg</Text></Text>
+                                            <PlateVisualizer weight={lift.value} />
                                         </Pressable>
                                     );
                                 })}
@@ -494,6 +543,28 @@ const styles = StyleSheet.create({
     big3Name: { fontSize: 9, fontWeight: "900", letterSpacing: 1, marginBottom: 4, fontFamily: "System" },
     big3Value: { fontSize: 22, fontWeight: "900", fontFamily: "System" },
     big3Unit: { fontSize: 12, fontWeight: "600", opacity: 0.6 },
+    plateVisualizer: {
+        height: 50,
+        width: "100%",
+        flexDirection: "row",
+        alignItems: "center",
+        marginTop: 14,
+        justifyContent: "center",
+    },
+    barbell: {
+        height: 4,
+        width: "100%",
+        position: "absolute",
+        borderRadius: 2,
+    },
+    platesContainer: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 1.5,
+    },
+    plate: {
+        borderRadius: 2,
+    },
 
     maxSection: { marginBottom: 32 },
     maxGrid: { gap: 12, paddingRight: 24 },

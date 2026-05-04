@@ -53,6 +53,7 @@ export default function WorkoutDetails() {
     const [loading, setLoading] = useState(true);
     const [workout, setWorkout] = useState<Workout | null>(null);
     const [sets, setSets] = useState<Set[]>([]);
+    const [adjacentWorkouts, setAdjacentWorkouts] = useState<{ prev: string | null, next: string | null }>({ prev: null, next: null });
 
     useFocusEffect(
         useCallback(() => {
@@ -62,6 +63,8 @@ export default function WorkoutDetails() {
 
     async function loadWorkoutDetails() {
         setLoading(true);
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
         
         // Load workout
         const { data: workoutData } = await supabase
@@ -72,6 +75,31 @@ export default function WorkoutDetails() {
 
         if (workoutData) {
             setWorkout(workoutData);
+
+            // Fetch Prev/Next Workouts
+            const [prevRes, nextRes] = await Promise.all([
+                supabase
+                    .from("workouts")
+                    .select("id")
+                    .eq("user_id", user.id)
+                    .lt("start_time", workoutData.start_time)
+                    .order("start_time", { ascending: false })
+                    .limit(1)
+                    .single(),
+                supabase
+                    .from("workouts")
+                    .select("id")
+                    .eq("user_id", user.id)
+                    .gt("start_time", workoutData.start_time)
+                    .order("start_time", { ascending: true })
+                    .limit(1)
+                    .single()
+            ]);
+
+            setAdjacentWorkouts({
+                prev: prevRes.data?.id || null,
+                next: nextRes.data?.id || null
+            });
 
             // Load sets with exercise info
             const { data: setsData } = await supabase
@@ -89,19 +117,37 @@ export default function WorkoutDetails() {
                 // For each exercise in this workout, check if any set is a PR compared to history BEFORE this workout
                 const exerciseIds = Array.from(new Set(workoutSets.map(s => s.exercise.id)));
                 
-                const { data: historyData } = await supabase
-                    .from("sets")
-                    .select(`
-                        weight_kg,
-                        reps,
-                        exercise_id,
-                        workouts!inner(start_time)
-                    `)
-                    .in("exercise_id", exerciseIds)
-                    .lt("workouts.start_time", workoutData.start_time);
+                // Fetch history for these exercises (paginated)
+                let historyData: any[] = [];
+                let hRangeStart = 0;
+                const hRangeStep = 1000;
+                let hHasMore = true;
+
+                while (hHasMore) {
+                    const { data, error } = await supabase
+                        .from("sets")
+                        .select(`
+                            weight_kg,
+                            reps,
+                            exercise_id,
+                            workouts!inner(start_time)
+                        `)
+                        .in("exercise_id", exerciseIds)
+                        .lt("workouts.start_time", workoutData.start_time)
+                        .range(hRangeStart, hRangeStart + hRangeStep - 1);
+
+                    if (error) break;
+                    if (data && data.length > 0) {
+                        historyData = [...historyData, ...data];
+                        if (data.length < hRangeStep) hHasMore = false;
+                        else hRangeStart += hRangeStep;
+                    } else {
+                        hHasMore = false;
+                    }
+                }
 
                 const historyMap: Record<string, { max1RM: number, maxWeight: number }> = {};
-                historyData?.forEach(h => {
+                historyData.forEach(h => {
                     const oneRM = h.reps > 0 ? h.weight_kg / (1.0278 - (0.0278 * h.reps)) : 0;
                     if (!historyMap[h.exercise_id]) {
                         historyMap[h.exercise_id] = { max1RM: oneRM, maxWeight: h.weight_kg };
@@ -172,9 +218,20 @@ export default function WorkoutDetails() {
         <View style={[styles.container, { backgroundColor: colors.background }]}>
             {/* Header */}
             <View style={[styles.header, { paddingTop: insets.top + 10, borderBottomColor: colors.border }]}>
-                <Pressable onPress={handleBack} style={styles.backBtn}>
-                    <Ionicons name="chevron-back" size={28} color={colors.text} />
-                </Pressable>
+                <View style={styles.headerLeft}>
+                    <Pressable onPress={handleBack} style={styles.backBtn}>
+                        <Ionicons name="chevron-back" size={28} color={colors.text} />
+                    </Pressable>
+                    {adjacentWorkouts.prev && (
+                        <Pressable 
+                            onPress={() => router.replace(`/app/workout/${adjacentWorkouts.prev}` as any)}
+                            style={styles.navBtn}
+                        >
+                            <Ionicons name="arrow-back-circle-outline" size={24} color={colors.secondaryText} />
+                        </Pressable>
+                    )}
+                </View>
+
                 <View style={styles.headerInfo}>
                     <Text style={[styles.headerTitle, { color: colors.text }]} numberOfLines={1}>
                         {workout.title || t("app.workout.default_title")}
@@ -183,9 +240,20 @@ export default function WorkoutDetails() {
                         {dateStr}
                     </Text>
                 </View>
-                <Pressable style={styles.backBtn}>
-                    <Ionicons name="ellipsis-horizontal" size={24} color={colors.text} />
-                </Pressable>
+
+                <View style={styles.headerRight}>
+                    {adjacentWorkouts.next && (
+                        <Pressable 
+                            onPress={() => router.replace(`/app/workout/${adjacentWorkouts.next}` as any)}
+                            style={styles.navBtn}
+                        >
+                            <Ionicons name="arrow-forward-circle-outline" size={24} color={colors.secondaryText} />
+                        </Pressable>
+                    )}
+                    <Pressable style={styles.backBtn}>
+                        <Ionicons name="ellipsis-horizontal" size={24} color={colors.text} />
+                    </Pressable>
+                </View>
             </View>
 
             <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 20 }]}>
@@ -266,11 +334,23 @@ const styles = StyleSheet.create({
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "space-between",
-        paddingHorizontal: 16,
+        paddingHorizontal: 8,
         paddingBottom: 12,
         borderBottomWidth: 1,
     },
+    headerLeft: {
+        flexDirection: "row",
+        alignItems: "center",
+        width: 80,
+    },
+    headerRight: {
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "flex-end",
+        width: 80,
+    },
     backBtn: { width: 40, height: 40, justifyContent: "center", alignItems: "center" },
+    navBtn: { width: 32, height: 40, justifyContent: "center", alignItems: "center" },
     headerInfo: { flex: 1, alignItems: "center" },
     headerTitle: { fontSize: 16, fontWeight: "800" },
     headerSubtitle: { fontSize: 12, fontWeight: "600" },

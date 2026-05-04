@@ -2,922 +2,1219 @@ import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useState, useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { 
-    ActivityIndicator, 
-    ScrollView, 
-    StyleSheet, 
-    Text, 
-    View, 
-    Pressable,
-    Dimensions
+import {
+  ActivityIndicator,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  Pressable,
+  Dimensions,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "../../../lib/supabase";
 import { useThemeColor } from "../../../lib/theme";
+import { usePreferences } from "../../../lib/preferences";
 import { useFocusEffect } from "expo-router";
 import { format, parseISO } from "date-fns";
-import Svg, { Path, Circle, Line, Defs, LinearGradient, Stop, G, Rect, Text as SvgText } from "react-native-svg";
-import { Gesture, GestureDetector, GestureHandlerRootView } from "react-native-gesture-handler";
-import Animated, { 
-    useSharedValue, 
-    useAnimatedStyle, 
-    withSpring, 
-    runOnJS 
-} from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
+import { LineChart, BarChart } from "react-native-gifted-charts";
 
 interface Exercise {
-    id: string;
-    name: string;
-    muscle_group: string | null;
+  id: string;
+  name: string;
+  muscle_group: string | null;
 }
 
 interface Set {
-    id: string;
-    weight_kg: number;
-    reps: number;
-    start_time: string; // From joined workout
-    workout_id: string;
+  id: string;
+  weight_kg: number;
+  reps: number;
+  start_time: string;
+  workout_id: string;
 }
 
 export default function ExerciseDetails() {
-    const { id } = useLocalSearchParams();
-    const router = useRouter();
-    const { t } = useTranslation();
-    const insets = useSafeAreaInsets();
-    const colors = useThemeColor();
+  const { id } = useLocalSearchParams();
+  const router = useRouter();
+  const { t } = useTranslation();
+  const insets = useSafeAreaInsets();
+  const colors = useThemeColor();
 
-    const [loading, setLoading] = useState(true);
-    const [exercise, setExercise] = useState<Exercise | null>(null);
-    const [sets, setSets] = useState<Set[]>([]);
-    const [stats, setStats] = useState({
-        oneRM: 0,
-        bestSet: { weight: 0, reps: 0 },
-        totalSets: 0,
-        maxWeight: 0
+  const [loading, setLoading] = useState(true);
+  const [exercise, setExercise] = useState<Exercise | null>(null);
+  const [sets, setSets] = useState<Set[]>([]);
+  const [stats, setStats] = useState({
+    oneRM: 0,
+    bestSet: { weight: 0, reps: 0 },
+    totalSets: 0,
+    maxWeight: 0,
+  });
+
+  const [timeSpan, setTimeSpan] = useState<"1m" | "6m" | "1y" | "all">("all");
+
+  const [isFeatured, setIsFeatured] = useState(false);
+  const [chartType, setChartType] = useState<"line" | "bar">("line");
+  const [xAxisType, setXAxisType] = useState<"date" | "reps" | "weight">(
+    "date",
+  );
+  const [yAxisType, setYAxisType] = useState<
+    "weight" | "reps" | "1rm" | "volume"
+  >("1rm");
+  const [showTopSetsOnly, setShowTopSetsOnly] = useState(true);
+  const [showSettings, setShowSettings] = useState(false);
+  const [activePointerItem, setActivePointerItem] = useState<any>(null);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadExerciseData();
+    }, [id]),
+  );
+
+  async function loadExerciseData() {
+    setLoading(true);
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const [exRes, profileRes] = await Promise.all([
+      supabase.from("exercises").select("*").eq("id", id).single(),
+      supabase
+        .from("profiles")
+        .select("featured_exercise_ids")
+        .eq("id", user.id)
+        .single(),
+    ]);
+
+    if (exRes.data) {
+      setExercise(exRes.data);
+      if (profileRes.data) {
+        const featured = (profileRes.data.featured_exercise_ids || []).includes(
+          id as string,
+        );
+        setIsFeatured(featured);
+      }
+    }
+
+    let allSetsData: any[] = [];
+    let rangeStart = 0;
+    const rangeStep = 1000;
+    let hasMore = true;
+
+    while (hasMore) {
+      const { data: setsData, error } = await supabase
+        .from("sets")
+        .select("id, weight_kg, reps, workout_id, workouts!inner(start_time)")
+        .eq("exercise_id", id)
+        .range(rangeStart, rangeStart + rangeStep - 1)
+        .order("id", { ascending: true });
+
+      if (error) {
+        console.error("Error fetching sets:", error);
+        break;
+      }
+
+      if (setsData && setsData.length > 0) {
+        allSetsData = [...allSetsData, ...setsData];
+        if (setsData.length < rangeStep) {
+          hasMore = false;
+        } else {
+          rangeStart += rangeStep;
+        }
+      } else {
+        hasMore = false;
+      }
+    }
+
+    if (allSetsData.length > 0) {
+      let formattedSets: Set[] = allSetsData.map((s: any) => ({
+        id: s.id,
+        weight_kg: s.weight_kg || 0,
+        reps: s.reps || 0,
+        workout_id: s.workout_id,
+        start_time: s.workouts.start_time,
+      }));
+
+      formattedSets.sort(
+        (a, b) =>
+          new Date(a.start_time).getTime() - new Date(b.start_time).getTime(),
+      );
+      setSets(formattedSets);
+
+      let max1RM = 0;
+      let bestWeight = 0;
+      let bestReps = 0;
+
+      formattedSets.forEach((s) => {
+        const weight = s.weight_kg;
+        const reps = s.reps;
+        const oneRM = reps === 1 ? weight : weight / (1.0278 - 0.0278 * reps);
+
+        if (oneRM > max1RM) max1RM = oneRM;
+        if (weight > bestWeight) {
+          bestWeight = weight;
+          bestReps = reps;
+        }
+      });
+
+      setStats({
+        oneRM: Math.round(max1RM * 10) / 10,
+        bestSet: { weight: bestWeight, reps: bestReps },
+        totalSets: formattedSets.length,
+        maxWeight: bestWeight,
+      });
+    }
+
+    setLoading(false);
+  }
+
+  const prMilestones = useMemo(() => {
+    if (sets.length === 0) return [];
+    const seenCombos = new Set<string>();
+    const milestones: any[] = [];
+
+    sets.forEach((s) => {
+      const comboKey = `${s.weight_kg}x${s.reps}`;
+      if (seenCombos.has(comboKey)) return;
+      const oneRM =
+        s.reps === 1 ? s.weight_kg : s.weight_kg / (1.0278 - 0.0278 * s.reps);
+      milestones.push({
+        date: s.start_time,
+        weight: s.weight_kg,
+        reps: s.reps,
+        oneRM: Math.round(oneRM * 10) / 10,
+        workout_id: s.workout_id,
+      });
+      seenCombos.add(comboKey);
     });
 
-    // Chart Settings
-    const [chartMode, setChartMode] = useState<"1rm" | "weight" | "both">("1rm");
-    const [timeSpan, setTimeSpan] = useState<"1m" | "6m" | "1y" | "all">("all");
-    const [isFeatured, setIsFeatured] = useState(false);
+    return milestones.sort((a, b) => b.oneRM - a.oneRM);
+  }, [sets]);
 
-    // Interaction State
-    const [activeIndex, setActiveIndex] = useState<number | null>(null);
-    const touchX = useSharedValue(0);
-    const isInteracting = useSharedValue(false);
+  const dynamicChartData = useMemo(() => {
+    if (sets.length === 0) return [];
 
-    useFocusEffect(
-        useCallback(() => {
-            loadExerciseData();
-        }, [id])
-    );
+    const prMap: Record<string, { is1RM: boolean; isWT: boolean }> = {};
+    let runMax1RM = 0;
+    let runMaxWT = 0;
 
-    async function loadExerciseData() {
-        setLoading(true);
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return;
-        
-        // Load exercise info and profile (to check featured)
-        const [exRes, profileRes] = await Promise.all([
-            supabase.from("exercises").select("*").eq("id", id).single(),
-            supabase.from("profiles").select("featured_exercise_ids").eq("id", user.id).single()
-        ]);
+    // Calculate all-time PRs chronologically
+    sets.forEach((s) => {
+      const oneRM =
+        s.reps === 1 ? s.weight_kg : s.weight_kg / (1.0278 - 0.0278 * s.reps);
+      const weight = s.weight_kg;
+      let is1RM = false;
+      let isWT = false;
+      if (oneRM > runMax1RM) {
+        runMax1RM = oneRM;
+        is1RM = true;
+      }
+      if (weight > runMaxWT) {
+        runMaxWT = weight;
+        isWT = true;
+      }
+      prMap[s.id] = { is1RM, isWT };
+    });
 
-        if (exRes.data) {
-            setExercise(exRes.data);
-            if (profileRes.data) {
-                const featured = (profileRes.data.featured_exercise_ids || []).includes(id as string);
-                setIsFeatured(featured);
-            }
-        }
-
-        // Load all sets for this exercise
-        const { data: setsData, count } = await supabase
-            .from("sets")
-            .select(`
-                id,
-                weight_kg,
-                reps,
-                workout_id,
-                workouts!inner(start_time)
-            `, { count: "exact" })
-            .eq("exercise_id", id)
-            .order("weight_kg", { ascending: false }) // Prioritize heavy sets for stats
-            .limit(10000);
-
-        if (setsData) {
-            let formattedSets: Set[] = setsData.map((s: any) => ({
-                id: s.id,
-                weight_kg: s.weight_kg || 0,
-                reps: s.reps || 0,
-                workout_id: s.workout_id,
-                start_time: s.workouts.start_time
-            }));
-
-            // Sort by start_time ascending
-            formattedSets.sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
-            setSets(formattedSets);
-
-            // Calculate stats
-            let max1RM = 0;
-            let bestWeight = 0;
-            let bestRepsForMaxWeight = 0;
-
-            formattedSets.forEach(s => {
-                const weight = s.weight_kg;
-                const reps = s.reps;
-                let oneRM = 0;
-                
-                if (reps === 1) {
-                    oneRM = weight;
-                } else if (reps > 1) {
-                    oneRM = weight / (1.0278 - (0.0278 * reps));
-                }
-
-                if (oneRM > max1RM) max1RM = oneRM;
-                if (weight > bestWeight) {
-                    bestWeight = weight;
-                    bestRepsForMaxWeight = reps;
-                }
-            });
-
-            setStats({
-                oneRM: Math.round(max1RM * 10) / 10,
-                bestSet: { weight: bestWeight, reps: bestRepsForMaxWeight },
-                totalSets: count || formattedSets.length,
-                maxWeight: bestWeight
-            });
-        }
-
-        setLoading(false);
+    let filtered = [...sets];
+    if (xAxisType === "date" && timeSpan !== "all") {
+      const cutoff = new Date();
+      if (timeSpan === "1m") cutoff.setMonth(cutoff.getMonth() - 1);
+      else if (timeSpan === "6m") cutoff.setMonth(cutoff.getMonth() - 6);
+      else if (timeSpan === "1y") cutoff.setFullYear(cutoff.getFullYear() - 1);
+      filtered = filtered.filter((s) => new Date(s.start_time) >= cutoff);
     }
 
-    // Chart Data Preparation with PR Detection and Filtering
-    const chartData = useMemo(() => {
-        if (sets.length === 0) return [];
-
-        // First, group ALL sets by date to detect all-time PRs
-        const allWorkoutGroups: Record<string, { oneRM: number, weight: number, workout_id: string }> = {};
-        
-        sets.forEach(s => {
-            const date = format(parseISO(s.start_time), "yyyy-MM-dd");
-            const weight = s.weight_kg;
-            const reps = s.reps;
-            let oneRM = 0;
-            
-            if (reps === 1) {
-                oneRM = weight;
-            } else if (reps > 1) {
-                oneRM = weight / (1.0278 - (0.0278 * reps));
-            }
-            
-            if (!allWorkoutGroups[date]) {
-                allWorkoutGroups[date] = { oneRM, weight, workout_id: s.workout_id };
-            } else {
-                if (oneRM > allWorkoutGroups[date].oneRM) allWorkoutGroups[date].oneRM = oneRM;
-                if (weight > allWorkoutGroups[date].weight) allWorkoutGroups[date].weight = weight;
-            }
-        });
-
-        const allSorted = Object.entries(allWorkoutGroups)
-            .sort((a, b) => a[0].localeCompare(b[0]))
-            .map(([date, vals]) => ({ 
-                date, 
-                ...vals,
-                isPR: false,
-                isWeightPR: false
-            }));
-
-        // Detect PRs (All-time high at that point in time)
-        let runningMax1RM = 0;
-        let runningMaxWeight = 0;
-        allSorted.forEach(d => {
-            if (d.oneRM > runningMax1RM) {
-                runningMax1RM = d.oneRM;
-                d.isPR = true;
-            }
-            if (d.weight > runningMaxWeight) {
-                runningMaxWeight = d.weight;
-                d.isWeightPR = true;
-            }
-        });
-
-        // Now filter the results by timeSpan
-        let filteredData = [...allSorted];
-        if (timeSpan !== "all") {
-            const cutoff = new Date();
-            if (timeSpan === "1m") cutoff.setMonth(cutoff.getMonth() - 1);
-            else if (timeSpan === "6m") cutoff.setMonth(cutoff.getMonth() - 6);
-            else if (timeSpan === "1y") cutoff.setFullYear(cutoff.getFullYear() - 1);
-            
-            filteredData = allSorted.filter(d => new Date(d.date) >= cutoff);
-        }
-
-        return filteredData;
-    }, [sets, timeSpan]);
-
-    const chartWidth = Dimensions.get("window").width - 32;
-    const chartHeight = 250;
-    const padding = 35;
-
-    const { points1RM, pointsWeight, yRange } = useMemo(() => {
-        if (chartData.length < 2) return { points1RM: [], pointsWeight: [], yRange: [0, 100] };
-
-        const allVals = [
-            ...chartData.map(d => d.oneRM),
-            ...chartData.map(d => d.weight)
-        ];
-        const max = Math.max(...allVals);
-        const min = Math.min(...allVals);
-        const r = max - min === 0 ? 20 : (max - min) * 1.3;
-        const baseMin = Math.max(0, min - (r * 0.15));
-
-        const pts1RM = chartData.map((d, i) => ({
-            x: (i / (chartData.length - 1)) * (chartWidth - 2 * padding) + padding,
-            y: chartHeight - ((d.oneRM - baseMin) / r) * (chartHeight - 2 * padding) - padding
-        }));
-
-        const ptsWeight = chartData.map((d, i) => ({
-            x: (i / (chartData.length - 1)) * (chartWidth - 2 * padding) + padding,
-            y: chartHeight - ((d.weight - baseMin) / r) * (chartHeight - 2 * padding) - padding
-        }));
-
-        return { points1RM: pts1RM, pointsWeight: ptsWeight, yRange: [baseMin, max] };
-    }, [chartData, chartWidth]);
-
-    const handleBack = () => {
-        if (router.canGoBack()) {
-            router.back();
-        } else {
-            router.replace("/app/dashboard");
-        }
-    };
-
-    async function toggleFeatured() {
-        if (!exercise) return;
-
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return;
-
-        const { data: profile } = await supabase
-            .from("profiles")
-            .select("featured_exercise_ids")
-            .eq("id", user.id)
-            .single();
-
-        let currentFeatured = profile?.featured_exercise_ids || [];
-        let newFeatured;
-
-        if (currentFeatured.includes(id as string)) {
-            newFeatured = currentFeatured.filter((i: string) => i !== id);
-        } else {
-            newFeatured = [...currentFeatured, id];
-        }
-
-        const { error } = await supabase
-            .from("profiles")
-            .update({ featured_exercise_ids: newFeatured })
-            .eq("id", user.id);
-
-        if (!error) {
-            setIsFeatured(!isFeatured);
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        }
+    if (showTopSetsOnly && xAxisType === "date") {
+      const groups: Record<string, Set> = {};
+      filtered.forEach((s) => {
+        const d = format(parseISO(s.start_time), "yyyy-MM-dd");
+        const getV = (set: Set) => {
+          if (yAxisType === "1rm")
+            return set.reps === 1
+              ? set.weight_kg
+              : set.weight_kg / (1.0278 - 0.0278 * set.reps);
+          if (yAxisType === "weight") return set.weight_kg;
+          if (yAxisType === "reps") return set.reps;
+          return set.weight_kg * set.reps;
+        };
+        if (!groups[d] || getV(s) > getV(groups[d])) groups[d] = s;
+      });
+      filtered = Object.values(groups).sort(
+        (a, b) =>
+          new Date(a.start_time).getTime() - new Date(b.start_time).getTime(),
+      );
     }
 
-    const updateActiveIndex = useCallback((x: number) => {
-        if (chartData.length < 2) return;
-        
-        const availableWidth = chartWidth - 2 * padding;
-        const normalizedX = (x - padding) / availableWidth;
-        const index = Math.max(0, Math.min(chartData.length - 1, Math.round(normalizedX * (chartData.length - 1))));
-        
-        setActiveIndex(current => {
-            if (current !== index) {
-                Haptics.selectionAsync();
-                return index;
-            }
-            return current;
-        });
-    }, [chartData, chartWidth]);
+    const raw = filtered.map((s) => {
+      let yVal = 0;
+      if (yAxisType === "1rm")
+        yVal =
+          s.reps === 1 ? s.weight_kg : s.weight_kg / (1.0278 - 0.0278 * s.reps);
+      else if (yAxisType === "weight") yVal = s.weight_kg;
+      else if (yAxisType === "reps") yVal = s.reps;
+      else yVal = s.weight_kg * s.reps;
 
-    const panGesture = useMemo(() => Gesture.Pan()
-        .runOnJS(true)
-        .onBegin((e) => {
-            updateActiveIndex(e.x);
-        })
-        .onUpdate((e) => {
-            updateActiveIndex(e.x);
-        }), [updateActiveIndex]);
+      const prs = prMap[s.id] || { is1RM: false, isWT: false };
+      return {
+        value: Math.round(yVal * 10) / 10,
+        xLabel:
+          xAxisType === "date"
+            ? format(parseISO(s.start_time), "MMM d")
+            : xAxisType === "reps"
+              ? `${s.reps}r`
+              : `${s.weight_kg}k`,
+        is1RMPR: prs.is1RM,
+        isWeightPR: prs.isWT,
+        weight: s.weight_kg,
+        reps: s.reps,
+        date: s.start_time,
+        workout_id: s.workout_id,
+        fullDate: format(parseISO(s.start_time), "MMMM d, yyyy"),
+      };
+    });
 
-    const tapGesture = useMemo(() => Gesture.Tap()
-        .runOnJS(true)
-        .onEnd((e) => {
-            updateActiveIndex(e.x);
-        }), [updateActiveIndex]);
+    if (xAxisType !== "date") {
+      raw.sort((a: any, b: any) =>
+        xAxisType === "reps" ? a.reps - b.reps : a.weight_kg - b.weight_kg,
+      );
+    }
 
-    const composedGesture = useMemo(() => Gesture.Race(panGesture, tapGesture), [panGesture, tapGesture]);
+    const interval = Math.max(1, Math.ceil(raw.length / 8));
+    return raw.map((item, i) => {
+      const isMilestone = item.is1RMPR || item.isWeightPR;
+      return {
+        ...item,
+        label: i % interval === 0 ? item.xLabel : "",
+        labelTextStyle: { color: colors.secondaryText, fontSize: 10 },
+        dataPointColor: item.is1RMPR
+          ? "#FFD700"
+          : item.isWeightPR
+            ? "#FF9500"
+            : colors.tint,
+        dataPointRadius: isMilestone ? 6 : 3,
+      };
+    });
+  }, [
+    sets,
+    timeSpan,
+    xAxisType,
+    yAxisType,
+    showTopSetsOnly,
+    colors.secondaryText,
+    colors.tint,
+  ]);
 
-    const renderChart = () => {
-        if (chartData.length < 2) {
-            return (
-                <View style={[styles.emptyChart, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                    <Ionicons name="stats-chart-outline" size={40} color={colors.border} />
-                    <Text style={[styles.emptyChartText, { color: colors.secondaryText }]}>
-                        More data needed for progress chart
-                    </Text>
-                </View>
-            );
-        }
+  const chartMax = useMemo(() => {
+    const mv = Math.max(...dynamicChartData.map((d) => d.value), 10);
+    return mv * 1.5; // Large buffer for PR tags
+  }, [dynamicChartData]);
 
-        const path1RM = `M ${points1RM.map(p => `${p.x},${p.y}`).join(" L ")}`;
-        const pathWeight = `M ${pointsWeight.map(p => `${p.x},${p.y}`).join(" L ")}`;
-        
-        const activeData = activeIndex !== null ? chartData[activeIndex] : null;
+  const chartProps = useMemo(() => {
+    const sw = Dimensions.get("window").width;
+    // ScrollView(16*2) + chartWrapper(16*2) = 64
+    const horizontalPadding = 64;
+    const yAxisWidth = 50;
+    const rightPadding = 15;
+    const avail = sw - horizontalPadding - yAxisWidth - rightPadding;
 
-        return (
-            <GestureHandlerRootView>
-                <View style={[styles.chartWrapper, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                    {/* Time Span Filter */}
-                    <View style={styles.filterRow}>
-                        {(["1m", "6m", "1y", "all"] as const).map((t) => (
-                            <Pressable 
-                                key={t} 
-                                style={[styles.filterBtn, timeSpan === t && { backgroundColor: colors.tint }]}
-                                onPress={() => {
-                                    setTimeSpan(t);
-                                    setActiveIndex(null);
-                                }}
-                            >
-                                <Text style={[styles.filterBtnText, { color: timeSpan === t ? "#FFF" : colors.secondaryText }]}>
-                                    {t.toUpperCase()}
-                                </Text>
-                            </Pressable>
-                        ))}
-                    </View>
+    // initialSpacing: 0 is mandatory for perfect touch-to-data mapping
+    const spacing =
+      dynamicChartData.length > 1 ? avail / (dynamicChartData.length - 1) : 0;
 
-                    <View style={styles.chartHeader}>
-                        <Pressable 
-                            style={{ flex: 1 }}
-                            onPress={() => activeData && router.push(`/app/workout/${activeData.workout_id}` as any)}
-                            disabled={!activeData}
-                        >
-                            <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-                                <Text style={[styles.chartSub, { color: colors.text }]}>
-                                    {activeData 
-                                        ? format(parseISO(activeData.date), "MMMM d, yyyy")
-                                        : "Drag or Tap chart to view details"}
-                                </Text>
-                                {activeData && <Ionicons name="chevron-forward" size={12} color={colors.secondaryText} />}
-                            </View>
-                            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 4 }}>
-                                {activeData?.isPR && (chartMode === "1rm" || chartMode === "both") && (
-                                    <View style={styles.prBadge}>
-                                        <Ionicons name="trophy" size={10} color="#FFD700" />
-                                        <Text style={styles.prBadgeText}>NEW 1RM PR</Text>
-                                    </View>
-                                )}
-                                {activeData?.isWeightPR && (chartMode === "weight" || chartMode === "both") && (
-                                    <View style={[styles.prBadge, { backgroundColor: "#FF950020" }]}>
-                                        <Ionicons name="trophy" size={10} color="#FF9500" />
-                                        <Text style={[styles.prBadgeText, { color: "#FF9500" }]}>NEW WEIGHT PR</Text>
-                                    </View>
-                                )}
-                            </View>
-                        </Pressable>
-                        {activeData && (
-                            <Pressable 
-                                style={styles.activeValuesRow}
-                                onPress={() => router.push(`/app/workout/${activeData.workout_id}` as any)}
-                            >
-                                {(chartMode === "1rm" || chartMode === "both") && (
-                                    <View style={styles.valCol}>
-                                        <Text style={[styles.valLabel, { color: colors.secondaryText }]}>EST. 1RM</Text>
-                                        <Text style={[styles.activeVal, { color: colors.tint }]}>{Math.round(activeData.oneRM * 10) / 10}kg</Text>
-                                    </View>
-                                )}
-                                {(chartMode === "weight" || chartMode === "both") && (
-                                    <View style={styles.valCol}>
-                                        <Text style={[styles.valLabel, { color: colors.secondaryText }]}>HEAVIEST</Text>
-                                        <Text style={[styles.activeVal, { color: "#5856D6" }]}>{activeData.weight}kg</Text>
-                                    </View>
-                                )}
-                            </Pressable>
-                        )}
-                    </View>
-
-                    <GestureDetector gesture={composedGesture}>
-                        <View style={{ width: chartWidth, height: chartHeight }}>
-                            <Svg width={chartWidth} height={chartHeight}>
-                                <Defs>
-                                    <LinearGradient id="grad1rm" x1="0" y1="0" x2="0" y2="1">
-                                        <Stop offset="0" stopColor={colors.tint} stopOpacity="0.1" />
-                                        <Stop offset="1" stopColor={colors.tint} stopOpacity="0" />
-                                    </LinearGradient>
-                                </Defs>
-
-                                {/* Grid Lines and Labels */}
-                                {[0, 0.5, 1].map((p, i) => {
-                                    const yPos = padding + (chartHeight - 2 * padding) * p;
-                                    const val = yRange[1] - (yRange[1] - yRange[0]) * p;
-                                    return (
-                                        <G key={i}>
-                                            <Line 
-                                                x1={padding} 
-                                                y1={yPos} 
-                                                x2={chartWidth - padding} 
-                                                y2={yPos} 
-                                                stroke={colors.border} 
-                                                strokeWidth="1"
-                                                strokeDasharray="4,4"
-                                            />
-                                            <SvgText
-                                                x={padding - 5}
-                                                y={yPos + 4}
-                                                fontSize="10"
-                                                fill={colors.secondaryText}
-                                                textAnchor="end"
-                                                fontWeight="600"
-                                                fontFamily="System"
-                                            >
-                                                {Math.round(val)}
-                                            </SvgText>
-                                        </G>
-                                    );
-                                })}
-
-                                {/* Actual Weight Path */}
-                                {(chartMode === "weight" || chartMode === "both") && (
-                                    <Path d={pathWeight} fill="none" stroke="#5856D6" strokeWidth="2" strokeOpacity={chartMode === "both" ? 0.5 : 1} />
-                                )}
-
-                                {/* 1RM Path */}
-                                {(chartMode === "1rm" || chartMode === "both") && (
-                                    <Path d={path1RM} fill="none" stroke={colors.tint} strokeWidth="3" />
-                                )}
-                                
-                                {/* PR Indicators */}
-                                {(chartMode === "1rm" || chartMode === "both") && chartData.map((d, i) => (
-                                    d.isPR && (
-                                        <Circle 
-                                            key={`pr-1rm-${i}`}
-                                            cx={points1RM[i].x} 
-                                            cy={points1RM[i].y} 
-                                            r="4" 
-                                            fill="#FFD700" 
-                                            stroke={colors.card}
-                                            strokeWidth="1"
-                                        />
-                                    )
-                                ))}
-                                {(chartMode === "weight" || chartMode === "both") && chartData.map((d, i) => (
-                                    d.isWeightPR && (
-                                        <Circle 
-                                            key={`pr-weight-${i}`}
-                                            cx={pointsWeight[i].x} 
-                                            cy={pointsWeight[i].y} 
-                                            r="4" 
-                                            fill="#FF9500" 
-                                            stroke={colors.card}
-                                            strokeWidth="1"
-                                        />
-                                    )
-                                ))}
-
-                                {activeIndex !== null && (
-                                    <G>
-                                        <Line 
-                                            x1={points1RM[activeIndex].x} 
-                                            y1={padding} 
-                                            x2={points1RM[activeIndex].x} 
-                                            y2={chartHeight - padding} 
-                                            stroke={colors.border} 
-                                            strokeWidth="1"
-                                        />
-                                        {(chartMode === "1rm" || chartMode === "both") && (
-                                            <G>
-                                                <Circle cx={points1RM[activeIndex].x} cy={points1RM[activeIndex].y} r="6" fill={colors.tint} />
-                                                <Rect 
-                                                    x={points1RM[activeIndex].x - 25} 
-                                                    y={points1RM[activeIndex].y - 25} 
-                                                    width="50" 
-                                                    height="18" 
-                                                    rx="4" 
-                                                    fill={colors.tint} 
-                                                />
-                                                <SvgText 
-                                                    x={points1RM[activeIndex].x} 
-                                                    y={points1RM[activeIndex].y - 12} 
-                                                    fontSize="10" 
-                                                    fill="#FFF" 
-                                                    textAnchor="middle" 
-                                                    fontWeight="bold"
-                                                    fontFamily="System"
-                                                >
-                                                    {Math.round(activeData?.oneRM || 0)}kg
-                                                </SvgText>
-                                            </G>
-                                        )}
-                                        {(chartMode === "weight" || chartMode === "both") && (
-                                            <G>
-                                                <Circle cx={pointsWeight[activeIndex].x} cy={pointsWeight[activeIndex].y} r="6" fill="#5856D6" />
-                                                {chartMode === "weight" && (
-                                                    <G>
-                                                        <Rect 
-                                                            x={pointsWeight[activeIndex].x - 25} 
-                                                            y={pointsWeight[activeIndex].y - 25} 
-                                                            width="50" 
-                                                            height="18" 
-                                                            rx="4" 
-                                                            fill="#5856D6" 
-                                                        />
-                                                        <SvgText 
-                                                            x={pointsWeight[activeIndex].x} 
-                                                            y={pointsWeight[activeIndex].y - 12} 
-                                                            fontSize="10" 
-                                                            fill="#FFF" 
-                                                            textAnchor="middle" 
-                                                            fontWeight="bold"
-                                                            fontFamily="System"
-                                                        >
-                                                            {Math.round(activeData?.weight || 0)}kg
-                                                        </SvgText>
-                                                    </G>
-                                                )}
-                                            </G>
-                                        )}
-                                    </G>
-                                )}
-                            </Svg>
-                        </View>
-                    </GestureDetector>
-
-                    {activeData && (
-                        <Pressable 
-                            style={styles.viewWorkoutBtn}
-                            onPress={() => router.push(`/app/workout/${activeData.workout_id}` as any)}
-                        >
-                            <Text style={[styles.viewWorkoutText, { color: colors.tint }]}>View Workout</Text>
-                            <Ionicons name="chevron-forward" size={14} color={colors.tint} />
-                        </Pressable>
-                    )}
-
-                    {/* Mode Selector */}
-                    <View style={styles.modeSelector}>
-                        <Pressable 
-                            style={[styles.modeBtn, chartMode === "1rm" && { backgroundColor: colors.tint + "20" }]}
-                            onPress={() => {
-                                setChartMode("1rm");
-                                setActiveIndex(null);
-                            }}
-                        >
-                            <View style={[styles.modeDot, { backgroundColor: colors.tint }]} />
-                            <Text style={[styles.modeText, { color: colors.text }]}>1RM</Text>
-                        </Pressable>
-                        <Pressable 
-                            style={[styles.modeBtn, chartMode === "weight" && { backgroundColor: "#5856D620" }]}
-                            onPress={() => {
-                                setChartMode("weight");
-                                setActiveIndex(null);
-                            }}
-                        >
-                            <View style={[styles.modeDot, { backgroundColor: "#5856D6" }]} />
-                            <Text style={[styles.modeText, { color: colors.text }]}>Weight</Text>
-                        </Pressable>
-                        <Pressable 
-                            style={[styles.modeBtn, chartMode === "both" && { backgroundColor: colors.secondary }]}
-                            onPress={() => {
-                                setChartMode("both");
-                                setActiveIndex(null);
-                            }}
-                        >
-                            <Text style={[styles.modeText, { color: colors.text, marginLeft: 0 }]}>Both</Text>
-                        </Pressable>
-                    </View>
-
-                    {/* Legend */}
-                    <View style={styles.legend}>
-                        <View style={styles.legendItem}>
-                            <View style={[styles.legendLine, { backgroundColor: colors.tint }]} />
-                            <Text style={[styles.legendText, { color: colors.secondaryText }]}>1RM</Text>
-                            <View style={[styles.legendDot, { backgroundColor: "#FFD700", marginLeft: 4 }]} />
-                            <Text style={[styles.legendText, { color: colors.secondaryText, fontSize: 8 }]}>PR</Text>
-                        </View>
-                        <View style={styles.legendItem}>
-                            <View style={[styles.legendLine, { backgroundColor: "#5856D6" }]} />
-                            <Text style={[styles.legendText, { color: colors.secondaryText }]}>Weight</Text>
-                            <View style={[styles.legendDot, { backgroundColor: "#FF9500", marginLeft: 4 }]} />
-                            <Text style={[styles.legendText, { color: colors.secondaryText, fontSize: 8 }]}>PR</Text>
-                        </View>
-                    </View>
-
-                    <View style={styles.chartFooter}>
-                        <Text style={[styles.footerDate, { color: colors.secondaryText }]}>
-                            {format(parseISO(chartData[0].date), "MMM d")}
-                        </Text>
-                        <Text style={[styles.footerDate, { color: colors.secondaryText }]}>
-                            {format(parseISO(chartData[chartData.length-1].date), "MMM d")}
-                        </Text>
-                    </View>
-                </View>
-            </GestureHandlerRootView>
-        );
-    };
-
-    if (loading) {
-        return (
-            <View style={[styles.center, { backgroundColor: colors.background }]}>
-                <ActivityIndicator size="large" color={colors.tint} />
+    return {
+      data: dynamicChartData,
+      width: avail,
+      height: 220,
+      maxValue: chartMax,
+      noOfSections: 5,
+      spacing: spacing,
+      initialSpacing: 0,
+      endSpacing: 0,
+      color: colors.tint,
+      thickness: 3,
+      startFillColor: colors.tint,
+      endFillColor: colors.tint,
+      startOpacity: 0.2,
+      endOpacity: 0.02,
+      yAxisThickness: 0,
+      xAxisThickness: 1,
+      xAxisColor: colors.border,
+      yAxisLabelWidth: 50,
+      yAxisTextStyle: {
+        color: colors.secondaryText,
+        fontSize: 10,
+        fontWeight: "bold",
+      },
+      xAxisLabelTextStyle: {
+        color: colors.secondaryText,
+        fontSize: 9,
+        width: 80,
+        textAlign: "center",
+      },
+      rotateLabel: true,
+      labelRotation: -45,
+      labelsExtraHeight: 50,
+      hideDataPoints: false,
+      renderDataPoint: (item: any) => {
+        if (item.is1RMPR || item.isWeightPR) {
+          const c = item.is1RMPR ? "#FFD700" : "#FF9500";
+          const l = item.is1RMPR ? "1RM" : "WT";
+          return (
+            <View style={styles.markerContainer}>
+              <View
+                style={[
+                  styles.markerDot,
+                  { backgroundColor: c, borderColor: "#FFF" },
+                ]}
+              />
+              <View style={[styles.markerTag, { backgroundColor: c }]}>
+                <Text style={styles.markerText}>{l}</Text>
+              </View>
             </View>
-        );
-    }
-
-    if (!exercise) {
+          );
+        }
         return (
-            <View style={[styles.center, { backgroundColor: colors.background }]}>
-                <Text style={{ color: colors.text }}>Exercise not found</Text>
-            </View>
+          <View
+            style={[
+              styles.normalDot,
+              { backgroundColor: colors.tint, borderColor: colors.card },
+            ]}
+          />
         );
+      },
+      pointerConfig: {
+        pointerStripUptoFullHeight: true,
+        pointerStripColor: colors.border,
+        pointerStripWidth: 2,
+        strokeDashArray: [2, 5],
+        pointerColor: colors.tint,
+        radius: 6,
+        pointerLabelWidth: 120,
+        pointerLabelHeight: 90,
+        activatePointerOnTap: true,
+        pointerVanishDelay: 0,
+        onPointerItemChange: (item: any) => {
+          const active = Array.isArray(item) ? item[0] : item;
+          if (active && active.value !== undefined)
+            setActivePointerItem(active);
+        },
+        pointerLabelComponent: (items: any) => {
+          if (!items || items.length === 0) return null;
+          const active = items[0];
+          return (
+            <View
+              style={[
+                styles.pointerLabel,
+                { backgroundColor: colors.card, borderColor: colors.border },
+              ]}
+            >
+              <Text
+                style={[styles.pointerDate, { color: colors.secondaryText }]}
+              >
+                {active.fullDate}
+              </Text>
+              <Text style={[styles.pointerVal, { color: colors.text }]}>
+                {active.weight}kg x {active.reps}
+              </Text>
+              <Text
+                style={{
+                  fontSize: 10,
+                  color: colors.secondaryText,
+                  marginTop: 2,
+                }}
+              >
+                {yAxisType.toUpperCase()}: {active.value}
+                {yAxisType === "reps" ? "r" : "kg"}
+              </Text>
+            </View>
+          );
+        },
+      },
+    };
+  }, [dynamicChartData, chartMax, colors, yAxisType]);
+
+  const handleBack = () =>
+    router.canGoBack() ? router.back() : router.replace("/app/dashboard");
+
+  async function toggleFeatured() {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user || !exercise) return;
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("featured_exercise_ids")
+      .eq("id", user.id)
+      .single();
+    let current = profile?.featured_exercise_ids || [];
+    let updated = current.includes(id as string)
+      ? current.filter((i: string) => i !== id)
+      : [...current, id];
+    const { error } = await supabase
+      .from("profiles")
+      .update({ featured_exercise_ids: updated })
+      .eq("id", user.id);
+    if (!error) {
+      setIsFeatured(!isFeatured);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     }
+  }
+
+  const renderChart = () => {
+    if (dynamicChartData.length === 0)
+      return (
+        <View
+          style={[
+            styles.emptyChart,
+            { backgroundColor: colors.card, borderColor: colors.border },
+          ]}
+        >
+          <Ionicons
+            name="stats-chart-outline"
+            size={40}
+            color={colors.border}
+          />
+          <Text
+            style={[styles.emptyChartText, { color: colors.secondaryText }]}
+          >
+            More data needed
+          </Text>
+        </View>
+      );
 
     return (
-        <View style={[styles.container, { backgroundColor: colors.background }]}>
-            {/* Header */}
-            <View style={[styles.header, { paddingTop: insets.top + 10, borderBottomColor: colors.border }]}>
-                <Pressable onPress={handleBack} style={styles.backBtn}>
-                    <Ionicons name="chevron-back" size={28} color={colors.text} />
-                </Pressable>
-                <View style={styles.headerInfo}>
-                    <Text style={[styles.headerTitle, { color: colors.text }]} numberOfLines={1}>
-                        {exercise.name}
-                    </Text>
-                    <Text style={[styles.headerSubtitle, { color: colors.secondaryText }]}>
-                        {exercise.muscle_group || "Full Body"}
-                    </Text>
-                </View>
-                <Pressable onPress={toggleFeatured} style={styles.featureBtn}>
-                    <Ionicons 
-                        name={isFeatured ? "star" : "star-outline"} 
-                        size={24} 
-                        color={isFeatured ? "#FFD700" : colors.secondaryText} 
-                    />
-                </Pressable>
-            </View>
-
-            <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 20 }]}>
-                {/* Stats Grid */}
-                <View style={styles.statsGrid}>
-                    <View style={[styles.statBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                        <Text style={[styles.statLabel, { color: colors.secondaryText }]}>Est. 1RM</Text>
-                        <Text style={[styles.statValue, { color: colors.text }]}>{stats.oneRM} kg</Text>
-                    </View>
-                    <View style={[styles.statBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                        <Text style={[styles.statLabel, { color: colors.secondaryText }]}>Max Weight</Text>
-                        <Text style={[styles.statValue, { color: colors.text }]}>{stats.maxWeight} kg</Text>
-                    </View>
-                </View>
-
-                <View style={styles.statsGrid}>
-                    <View style={[styles.statBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                        <Text style={[styles.statLabel, { color: colors.secondaryText }]}>Best Set</Text>
-                        <Text style={[styles.statValue, { color: colors.text }]}>{stats.bestSet.weight}kg x {stats.bestSet.reps}</Text>
-                    </View>
-                    <View style={[styles.statBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                        <Text style={[styles.statLabel, { color: colors.secondaryText }]}>Total Sets</Text>
-                        <Text style={[styles.statValue, { color: colors.text }]}>{stats.totalSets}</Text>
-                    </View>
-                </View>
-
-                {/* Chart */}
-                {renderChart()}
-
-                {/* History List */}
-                <Text style={[styles.sectionTitle, { color: colors.text }]}>History</Text>
-                {sets.slice().reverse().map((set, index) => {
-                    const currentSetDate = format(parseISO(set.start_time), "yyyy-MM-dd");
-                    const prevSet = sets[sets.length - index];
-                    const prevSetDate = prevSet ? format(parseISO(prevSet.start_time), "yyyy-MM-dd") : null;
-                    const showDate = index === 0 || currentSetDate !== prevSetDate;
-                    
-                    return (
-                        <View key={set.id}>
-                            {showDate && (
-                                <Text style={[styles.dateHeader, { color: colors.secondaryText }]}>
-                                    {format(parseISO(set.start_time), "MMMM d, yyyy")}
-                                </Text>
-                            )}
-                            <Pressable 
-                                style={[styles.setRow, { borderBottomColor: colors.border }]}
-                                onPress={() => router.push(`/app/workout/${set.workout_id}` as any)}
-                            >
-                                <View>
-                                    <Text style={[styles.setInfo, { color: colors.text }]}>
-                                        {set.weight_kg} kg x {set.reps}
-                                    </Text>
-                                    <Text style={[styles.oneRMDetail, { color: colors.secondaryText }]}>
-                                        Calculated 1RM: {Math.round((set.reps > 0 ? set.weight_kg / (1.0278 - (0.0278 * set.reps)) : 0) * 10) / 10} kg
-                                    </Text>
-                                </View>
-                                <Ionicons name="chevron-forward" size={16} color={colors.border} />
-                            </Pressable>
-                        </View>
-                    );
-                })}
-            </ScrollView>
+      <View
+        style={[
+          styles.chartWrapper,
+          { backgroundColor: colors.card, borderColor: colors.border },
+        ]}
+      >
+        <View style={styles.chartHeaderLegacy}>
+          <View>
+            <Text style={[styles.chartTitleLegacy, { color: colors.text }]}>
+              {yAxisType.toUpperCase()} vs {xAxisType.toUpperCase()}
+            </Text>
+            <Text style={[styles.chartSub, { color: colors.secondaryText }]}>
+              {chartType === "line" ? "Line" : "Bar"} •{" "}
+              {xAxisType === "date" ? timeSpan.toUpperCase() : "All"}
+            </Text>
+          </View>
+          <Pressable
+            onPress={() => setShowSettings(!showSettings)}
+            style={[
+              styles.settingsBtn,
+              showSettings && { backgroundColor: colors.tint + "20" },
+            ]}
+          >
+            <Ionicons
+              name="options-outline"
+              size={20}
+              color={showSettings ? colors.tint : colors.secondaryText}
+            />
+          </Pressable>
         </View>
+
+        <View
+          style={[
+            styles.activeHeader,
+            { borderBottomColor: colors.border + "40" },
+          ]}
+        >
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.activeDate, { color: colors.secondaryText }]}>
+              {activePointerItem
+                ? activePointerItem.fullDate
+                : "Tap chart for details"}
+            </Text>
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 8,
+                marginTop: 2,
+              }}
+            >
+              <Text style={[styles.activeValueBig, { color: colors.text }]}>
+                {activePointerItem
+                  ? `${activePointerItem.value}${yAxisType === "reps" ? "r" : "kg"}`
+                  : "-"}
+              </Text>
+              {(activePointerItem?.is1RMPR ||
+                activePointerItem?.isWeightPR) && (
+                <View style={styles.prBadge}>
+                  <Ionicons name="trophy" size={10} color="#FFD700" />
+                  <Text style={styles.prBadgeText}>NEW PR</Text>
+                </View>
+              )}
+            </View>
+          </View>
+          {activePointerItem && (
+            <Pressable
+              onPress={() =>
+                router.push(
+                  `/app/workout/${activePointerItem.workout_id}` as any,
+                )
+              }
+              style={[
+                styles.miniViewWorkout,
+                { backgroundColor: colors.tint + "10" },
+              ]}
+            >
+              <Text style={[styles.miniViewText, { color: colors.tint }]}>
+                VIEW
+              </Text>
+              <Ionicons name="chevron-forward" size={12} color={colors.tint} />
+            </Pressable>
+          )}
+        </View>
+
+        <View style={styles.prLegend}>
+          <View style={styles.legendItem}>
+            <View style={[styles.legendDot, { backgroundColor: "#FFD700" }]} />
+            <Text style={[styles.legendText, { color: colors.secondaryText }]}>
+              1RM PR
+            </Text>
+          </View>
+          <View style={styles.legendItem}>
+            <View style={[styles.legendDot, { backgroundColor: "#FF9500" }]} />
+            <Text style={[styles.legendText, { color: colors.secondaryText }]}>
+              WT PR
+            </Text>
+          </View>
+          <View style={styles.legendItem}>
+            <View
+              style={[styles.legendDot, { backgroundColor: colors.tint }]}
+            />
+            <Text style={[styles.legendText, { color: colors.secondaryText }]}>
+              Normal
+            </Text>
+          </View>
+        </View>
+
+        {showSettings && (
+          <View
+            style={[styles.settingsPanel, { borderBottomColor: colors.border }]}
+          >
+            <View style={styles.settingRow}>
+              <Text
+                style={[styles.settingLabel, { color: colors.secondaryText }]}
+              >
+                Type
+              </Text>
+              <View style={styles.settingOptions}>
+                {(["line", "bar"] as const).map((t) => (
+                  <Pressable
+                    key={t}
+                    onPress={() => setChartType(t)}
+                    style={[
+                      styles.optionBtn,
+                      chartType === t && { backgroundColor: colors.tint },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.optionText,
+                        chartType === t && { color: "#FFF" },
+                      ]}
+                    >
+                      {t.toUpperCase()}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+            <View style={styles.settingRow}>
+              <Text
+                style={[styles.settingLabel, { color: colors.secondaryText }]}
+              >
+                Y-Axis
+              </Text>
+              <View style={styles.settingOptions}>
+                {(["1rm", "weight", "reps", "volume"] as const).map((y) => (
+                  <Pressable
+                    key={y}
+                    onPress={() => setYAxisType(y)}
+                    style={[
+                      styles.optionBtn,
+                      yAxisType === y && { backgroundColor: colors.tint },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.optionText,
+                        yAxisType === y && { color: "#FFF" },
+                      ]}
+                    >
+                      {y === "1rm" ? "1RM" : y.toUpperCase()}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+            <View style={styles.settingRow}>
+              <Text
+                style={[styles.settingLabel, { color: colors.secondaryText }]}
+              >
+                X-Axis
+              </Text>
+              <View style={styles.settingOptions}>
+                {(["date", "reps", "weight"] as const).map((x) => (
+                  <Pressable
+                    key={x}
+                    onPress={() => setXAxisType(x)}
+                    style={[
+                      styles.optionBtn,
+                      xAxisType === x && { backgroundColor: colors.tint },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.optionText,
+                        xAxisType === x && { color: "#FFF" },
+                      ]}
+                    >
+                      {x.toUpperCase()}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+            <View style={styles.settingRow}>
+              <Text
+                style={[styles.settingLabel, { color: colors.secondaryText }]}
+              >
+                Filters
+              </Text>
+              <View style={styles.settingOptions}>
+                <Pressable
+                  onPress={() => setShowTopSetsOnly(!showTopSetsOnly)}
+                  style={[
+                    styles.optionBtn,
+                    showTopSetsOnly && { backgroundColor: colors.tint },
+                    { flex: 2 },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.optionText,
+                      showTopSetsOnly && { color: "#FFF" },
+                    ]}
+                  >
+                    TOP SETS ONLY
+                  </Text>
+                </Pressable>
+                {xAxisType === "date" &&
+                  (["1m", "6m", "1y", "all"] as const).map((t) => (
+                    <Pressable
+                      key={t}
+                      onPress={() => setTimeSpan(t)}
+                      style={[
+                        styles.optionBtn,
+                        timeSpan === t && { backgroundColor: colors.tint },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.optionText,
+                          timeSpan === t && { color: "#FFF" },
+                        ]}
+                      >
+                        {t.toUpperCase()}
+                      </Text>
+                    </Pressable>
+                  ))}
+              </View>
+            </View>
+          </View>
+        )}
+
+        <View style={{ marginTop: 20, zIndex: 10, overflow: "visible" }}>
+          {chartType === "line" ? (
+            <LineChart {...chartProps} areaChart />
+          ) : (
+            <BarChart
+              {...chartProps}
+              barWidth={22}
+              barBorderRadius={4}
+              frontColor={colors.tint}
+            />
+          )}
+        </View>
+      </View>
     );
+  };
+
+  if (loading)
+    return (
+      <View style={[styles.center, { backgroundColor: colors.background }]}>
+        <ActivityIndicator size="large" color={colors.tint} />
+      </View>
+    );
+  if (!exercise)
+    return (
+      <View style={[styles.center, { backgroundColor: colors.background }]}>
+        <Text style={{ color: colors.text }}>Exercise not found</Text>
+      </View>
+    );
+
+  return (
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <View
+        style={[
+          styles.header,
+          { paddingTop: insets.top + 10, borderBottomColor: colors.border },
+        ]}
+      >
+        <Pressable onPress={handleBack} style={styles.backBtn}>
+          <Ionicons name="chevron-back" size={28} color={colors.text} />
+        </Pressable>
+        <View style={styles.headerInfo}>
+          <Text
+            style={[styles.headerTitle, { color: colors.text }]}
+            numberOfLines={1}
+          >
+            {exercise.name}
+          </Text>
+          <Text
+            style={[styles.headerSubtitle, { color: colors.secondaryText }]}
+          >
+            {exercise.muscle_group || "Full Body"}
+          </Text>
+        </View>
+        <Pressable onPress={toggleFeatured} style={styles.featureBtn}>
+          <Ionicons
+            name={isFeatured ? "star" : "star-outline"}
+            size={24}
+            color={isFeatured ? "#FFD700" : colors.secondaryText}
+          />
+        </Pressable>
+      </View>
+
+      <ScrollView
+        contentContainerStyle={[
+          styles.content,
+          { paddingBottom: insets.bottom + 20 },
+        ]}
+      >
+        <View style={styles.statsGrid}>
+          <View
+            style={[
+              styles.statBox,
+              { backgroundColor: colors.card, borderColor: colors.border },
+            ]}
+          >
+            <Text style={[styles.statLabel, { color: colors.secondaryText }]}>
+              Est. 1RM
+            </Text>
+            <Text style={[styles.statValue, { color: colors.text }]}>
+              {stats.oneRM} kg
+            </Text>
+          </View>
+          <View
+            style={[
+              styles.statBox,
+              { backgroundColor: colors.card, borderColor: colors.border },
+            ]}
+          >
+            <Text style={[styles.statLabel, { color: colors.secondaryText }]}>
+              Max Weight
+            </Text>
+            <Text style={[styles.statValue, { color: colors.text }]}>
+              {stats.maxWeight} kg
+            </Text>
+          </View>
+        </View>
+        <View style={styles.statsGrid}>
+          <View
+            style={[
+              styles.statBox,
+              { backgroundColor: colors.card, borderColor: colors.border },
+            ]}
+          >
+            <Text style={[styles.statLabel, { color: colors.secondaryText }]}>
+              Best Set
+            </Text>
+            <Text style={[styles.statValue, { color: colors.text }]}>
+              {stats.bestSet.weight}kg x {stats.bestSet.reps}
+            </Text>
+          </View>
+          <View
+            style={[
+              styles.statBox,
+              { backgroundColor: colors.card, borderColor: colors.border },
+            ]}
+          >
+            <Text style={[styles.statLabel, { color: colors.secondaryText }]}>
+              Total Sets
+            </Text>
+            <Text style={[styles.statValue, { color: colors.text }]}>
+              {stats.totalSets}
+            </Text>
+          </View>
+        </View>
+
+        {renderChart()}
+
+        {prMilestones.length > 0 && (
+          <View style={styles.milestoneSection}>
+            <Text style={[styles.sectionTitle, { color: colors.text }]}>
+              1RM Milestones
+            </Text>
+            <View
+              style={[
+                styles.milestoneList,
+                { backgroundColor: colors.card, borderColor: colors.border },
+              ]}
+            >
+              {prMilestones.slice(0, 10).map((ms, i) => (
+                <Pressable
+                  key={i}
+                  style={[
+                    styles.milestoneRow,
+                    i < prMilestones.length - 1 && {
+                      borderBottomColor: colors.border + "40",
+                    },
+                  ]}
+                  onPress={() =>
+                    router.push(`/app/workout/${ms.workout_id}` as any)
+                  }
+                >
+                  <View style={styles.milestoneLeft}>
+                    <Text
+                      style={[styles.milestoneValue, { color: colors.text }]}
+                    >
+                      {ms.oneRM} kg
+                    </Text>
+                    <Text
+                      style={[
+                        styles.milestoneSub,
+                        { color: colors.secondaryText },
+                      ]}
+                    >
+                      {ms.weight}kg x {ms.reps}
+                    </Text>
+                  </View>
+                  <View style={styles.milestoneRight}>
+                    <Text
+                      style={[
+                        styles.milestoneDate,
+                        { color: colors.secondaryText },
+                      ]}
+                    >
+                      {format(parseISO(ms.date), "MMM d, yyyy")}
+                    </Text>
+                    <Ionicons
+                      name="chevron-forward"
+                      size={14}
+                      color={colors.border}
+                    />
+                  </View>
+                </Pressable>
+              ))}
+            </View>
+          </View>
+        )}
+
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>
+          History
+        </Text>
+        {sets
+          .slice()
+          .reverse()
+          .map((set, index) => {
+            const currD = format(parseISO(set.start_time), "yyyy-MM-dd");
+            const prevS = sets[sets.length - index];
+            const prevD = prevS
+              ? format(parseISO(prevS.start_time), "yyyy-MM-dd")
+              : null;
+            const showD = index === 0 || currD !== prevD;
+            const calc1RM =
+              Math.round(
+                (set.reps > 0
+                  ? set.weight_kg / (1.0278 - 0.0278 * set.reps)
+                  : 0) * 10,
+              ) / 10;
+            return (
+              <View key={set.id}>
+                {showD && (
+                  <Text
+                    style={[styles.dateHeader, { color: colors.secondaryText }]}
+                  >
+                    {format(parseISO(set.start_time), "MMMM d, yyyy")}
+                  </Text>
+                )}
+                <Pressable
+                  style={[styles.setRow, { borderBottomColor: colors.border }]}
+                  onPress={() =>
+                    router.push(`/app/workout/${set.workout_id}` as any)
+                  }
+                >
+                  <View>
+                    <Text style={[styles.setInfo, { color: colors.text }]}>
+                      {set.weight_kg} kg x {set.reps}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.oneRMDetail,
+                        { color: colors.secondaryText },
+                      ]}
+                    >
+                      Calc. 1RM: {calc1RM} kg
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name="chevron-forward"
+                    size={16}
+                    color={colors.border}
+                  />
+                </Pressable>
+              </View>
+            );
+          })}
+      </ScrollView>
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
-    container: { flex: 1 },
-    header: {
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "space-between",
-        paddingHorizontal: 16,
-        paddingBottom: 12,
-        borderBottomWidth: 1,
-    },
-    backBtn: { width: 40, height: 40, justifyContent: "center", alignItems: "center" },
-    featureBtn: { width: 40, height: 40, justifyContent: "center", alignItems: "center" },
-    headerInfo: { flex: 1, alignItems: "center" },
-    headerTitle: { fontSize: 16, fontWeight: "800", fontFamily: "System" },
-    headerSubtitle: { fontSize: 12, fontWeight: "600", fontFamily: "System" },
-
-    content: { padding: 16 },
-    center: { flex: 1, justifyContent: "center", alignItems: "center" },
-
-    statsGrid: { flexDirection: "row", gap: 12, marginBottom: 12 },
-    statBox: {
-        flex: 1,
-        padding: 16,
-        borderRadius: 12,
-        borderWidth: 1,
-    },
-    statLabel: { fontSize: 11, fontWeight: "700", textTransform: "uppercase", marginBottom: 4, fontFamily: "System" },
-    statValue: { fontSize: 18, fontWeight: "800", fontFamily: "System" },
-
-    chartWrapper: {
-        marginTop: 12,
-        marginBottom: 24,
-        padding: 16,
-        borderRadius: 16,
-        borderWidth: 1,
-    },
-    filterRow: {
-        flexDirection: "row",
-        gap: 8,
-        marginBottom: 20,
-    },
-    filterBtn: {
-        flex: 1,
-        height: 28,
-        borderRadius: 14,
-        justifyContent: "center",
-        alignItems: "center",
-    },
-    filterBtnText: {
-        fontSize: 10,
-        fontWeight: "800",
-        fontFamily: "System",
-    },
-    chartHeader: {
-        flexDirection: "row",
-        justifyContent: "space-between",
-        alignItems: "flex-start",
-        marginBottom: 16,
-        minHeight: 50,
-    },
-    chartSub: { fontSize: 13, fontWeight: "700", fontFamily: "System" },
-    prBadge: {
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 3,
-        backgroundColor: "#FFD70020",
-        paddingHorizontal: 6,
-        paddingVertical: 2,
-        borderRadius: 4,
-    },
-    prBadgeText: {
-        fontSize: 9,
-        fontWeight: "900",
-        color: "#FFD700",
-        fontFamily: "System",
-    },
-    activeValuesRow: {
-        flexDirection: "row",
-        gap: 16,
-    },
-    valCol: {
-        alignItems: "flex-end",
-    },
-    valLabel: {
-        fontSize: 9,
-        fontWeight: "800",
-        marginBottom: 2,
-        fontFamily: "System",
-    },
-    activeVal: { fontSize: 20, fontWeight: "900", fontFamily: "System" },
-
-    modeSelector: {
-        flexDirection: "row",
-        marginTop: 20,
-        gap: 8,
-    },
-    modeBtn: {
-        flex: 1,
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "center",
-        height: 36,
-        borderRadius: 18,
-    },
-    modeDot: {
-        width: 8,
-        height: 8,
-        borderRadius: 4,
-        marginRight: 6,
-    },
-    modeText: {
-        fontSize: 11,
-        fontWeight: "800",
-        fontFamily: "System",
-    },
-
-    legend: {
-        flexDirection: "row",
-        flexWrap: "wrap",
-        gap: 12,
-        marginTop: 16,
-        paddingTop: 16,
-        borderTopWidth: 1,
-        borderTopColor: "rgba(128,128,128,0.1)",
-    },
-    legendItem: {
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 6,
-    },
-    legendLine: {
-        width: 12,
-        height: 3,
-        borderRadius: 2,
-    },
-    legendDot: {
-        width: 8,
-        height: 8,
-        borderRadius: 4,
-    },
-    legendText: {
-        fontSize: 10,
-        fontWeight: "700",
-        fontFamily: "System",
-    },
-
-    chartFooter: {
-        flexDirection: "row",
-        justifyContent: "space-between",
-        marginTop: 10,
-    },
-    footerDate: { fontSize: 11, fontWeight: "700", fontFamily: "System" },
-
-    viewWorkoutBtn: {
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "center",
-        paddingVertical: 8,
-        marginTop: 4,
-        gap: 4,
-    },
-    viewWorkoutText: {
-        fontSize: 13,
-        fontWeight: "700",
-        color: "#5856D6",
-        fontFamily: "System",
-    },
-
-    emptyChart: {
-        height: 200,
-        borderRadius: 16,
-        borderWidth: 1,
-        justifyContent: "center",
-        alignItems: "center",
-        marginVertical: 12,
-        borderStyle: "dashed",
-    },
-    emptyChartText: { marginTop: 12, fontSize: 14, fontWeight: "600", fontFamily: "System" },
-
-    sectionTitle: { fontSize: 18, fontWeight: "800", marginTop: 20, marginBottom: 16, fontFamily: "System" },
-    dateHeader: { fontSize: 13, fontWeight: "700", marginTop: 20, marginBottom: 12, fontFamily: "System" },
-    setRow: {
-        flexDirection: "row",
-        justifyContent: "space-between",
-        alignItems: "center",
-        paddingVertical: 14,
-        borderBottomWidth: 1,
-    },
-    setInfo: { fontSize: 16, fontWeight: "700", fontFamily: "System" },
-    oneRMDetail: { fontSize: 12, fontWeight: "600", marginTop: 2, fontFamily: "System" },
+  container: { flex: 1 },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+  },
+  backBtn: {
+    width: 40,
+    height: 40,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  featureBtn: {
+    width: 40,
+    height: 40,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  headerInfo: { flex: 1, alignItems: "center" },
+  headerTitle: { fontSize: 16, fontWeight: "800", fontFamily: "System" },
+  headerSubtitle: { fontSize: 12, fontWeight: "600", fontFamily: "System" },
+  content: { padding: 16 },
+  center: { flex: 1, justifyContent: "center", alignItems: "center" },
+  statsGrid: { flexDirection: "row", gap: 12, marginBottom: 12 },
+  statBox: { flex: 1, padding: 16, borderRadius: 12, borderWidth: 1 },
+  statLabel: {
+    fontSize: 11,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    marginBottom: 4,
+    fontFamily: "System",
+  },
+  statValue: { fontSize: 18, fontWeight: "800", fontFamily: "System" },
+  chartWrapper: {
+    marginTop: 12,
+    marginBottom: 24,
+    padding: 16,
+    borderRadius: 16,
+    borderWidth: 1,
+    overflow: "visible",
+  },
+  chartHeaderLegacy: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  chartTitleLegacy: { fontSize: 14, fontWeight: "900", fontFamily: "System" },
+  activeHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 12,
+    marginTop: 8,
+    borderBottomWidth: 1,
+  },
+  activeDate: { fontSize: 11, fontWeight: "700", fontFamily: "System" },
+  activeValueBig: { fontSize: 28, fontWeight: "900", fontFamily: "System" },
+  miniViewWorkout: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    gap: 4,
+  },
+  miniViewText: { fontSize: 10, fontWeight: "900" },
+  prLegend: { flexDirection: "row", gap: 12, marginTop: 4, paddingBottom: 8 },
+  legendItem: { flexDirection: "row", alignItems: "center", gap: 4 },
+  legendDot: { width: 8, height: 8, borderRadius: 4 },
+  legendText: { fontSize: 9, fontWeight: "700", fontFamily: "System" },
+  settingsBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  settingsPanel: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(128,128,128,0.1)",
+    gap: 12,
+  },
+  settingRow: { flexDirection: "row", alignItems: "center", gap: 12 },
+  settingLabel: {
+    width: 60,
+    fontSize: 10,
+    fontWeight: "800",
+    fontFamily: "System",
+  },
+  settingOptions: { flex: 1, flexDirection: "row", gap: 6, flexWrap: "wrap" },
+  optionBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    backgroundColor: "rgba(128,128,128,0.1)",
+  },
+  optionText: {
+    fontSize: 9,
+    fontWeight: "800",
+    color: "#888",
+    fontFamily: "System",
+  },
+  markerContainer: {
+    width: 30,
+    height: 30,
+    alignItems: "center",
+    justifyContent: "center",
+    marginLeft: -15,
+    marginTop: -15,
+    overflow: "visible",
+    zIndex: 100,
+  },
+  markerDot: { width: 14, height: 14, borderRadius: 7, borderWidth: 2 },
+  markerTag: {
+    position: "absolute",
+    top: -16,
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 4,
+    elevation: 5,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.5,
+    shadowRadius: 2,
+  },
+  markerText: { color: "#000", fontSize: 7, fontWeight: "900" },
+  normalDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    borderWidth: 1,
+    marginLeft: -3,
+    marginTop: -3,
+  },
+  pointerLabel: {
+    left: -60,
+    top: 40,
+    padding: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 8,
+  },
+  pointerDate: {
+    fontSize: 9,
+    fontWeight: "700",
+    marginBottom: 2,
+    fontFamily: "System",
+  },
+  pointerVal: { fontSize: 14, fontWeight: "900", fontFamily: "System" },
+  chartSub: { fontSize: 11, fontWeight: "700", fontFamily: "System" },
+  prBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    backgroundColor: "#FFD70020",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    marginTop: 4,
+    alignSelf: "flex-start",
+  },
+  prBadgeText: {
+    fontSize: 9,
+    fontWeight: "900",
+    color: "#FFD700",
+    fontFamily: "System",
+  },
+  milestoneSection: { marginBottom: 24 },
+  milestoneList: { borderRadius: 12, borderWidth: 1, overflow: "hidden" },
+  milestoneRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: 14,
+    borderBottomWidth: 1,
+  },
+  milestoneLeft: { flex: 1 },
+  milestoneValue: { fontSize: 16, fontWeight: "800", fontFamily: "System" },
+  milestoneSub: {
+    fontSize: 11,
+    fontWeight: "600",
+    marginTop: 2,
+    fontFamily: "System",
+  },
+  milestoneRight: { flexDirection: "row", alignItems: "center", gap: 8 },
+  milestoneDate: { fontSize: 11, fontWeight: "700", fontFamily: "System" },
+  emptyChart: {
+    height: 200,
+    borderRadius: 16,
+    borderWidth: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    marginVertical: 12,
+    borderStyle: "dashed",
+  },
+  emptyChartText: {
+    marginTop: 12,
+    fontSize: 14,
+    fontWeight: "600",
+    fontFamily: "System",
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: "800",
+    marginTop: 20,
+    marginBottom: 16,
+    fontFamily: "System",
+  },
+  dateHeader: {
+    fontSize: 13,
+    fontWeight: "700",
+    marginTop: 20,
+    marginBottom: 12,
+    fontFamily: "System",
+  },
+  setRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+  },
+  setInfo: { fontSize: 16, fontWeight: "700", fontFamily: "System" },
+  oneRMDetail: {
+    fontSize: 12,
+    fontWeight: "600",
+    marginTop: 2,
+    fontFamily: "System",
+  },
 });
-

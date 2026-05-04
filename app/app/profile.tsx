@@ -11,12 +11,14 @@ import { formatDateInput, validateDob, validateFullName } from "../../lib/valida
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "../../lib/theme";
+import { usePreferences } from "../../lib/preferences";
 
 export default function Profile() {
     const { t, i18n } = useTranslation();
     const router = useRouter();
     const insets = useSafeAreaInsets();
     const { themeMode, setThemeMode, colors } = useTheme();
+    const { plateType, setPlateType } = usePreferences();
     
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -25,6 +27,8 @@ export default function Profile() {
     const [fullName, setFullName] = useState("");
     const [dob, setDob] = useState("");
     const [email, setEmail] = useState("");
+    const [bodyweight, setBodyweight] = useState("");
+    const [gender, setGender] = useState<"male" | "female" | "other">("other");
     const [avatar, setAvatar] = useState<string | null>(null);
     const [exercises, setExercises] = useState<{id: string, name: string}[]>([]);
     const [featuredIds, setFeaturedIds] = useState<string[]>([]);
@@ -33,30 +37,43 @@ export default function Profile() {
 
     async function loadProfile() {
         setLoading(true);
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return;
-        setEmail(user.email ?? "");
-        
-        const [profileRes, exercisesRes] = await Promise.all([
-            supabase.from("profiles").select("*").eq("id", user.id).single(),
-            supabase.from("exercises").select("id, name").eq("user_id", user.id)
-        ]);
-
-        if (profileRes.data) {
-            setFullName(profileRes.data.full_name ?? "");
-            setDob(profileRes.data.date_of_birth ?? "");
-            setAvatar(profileRes.data.avatar_url ?? null);
-            setFeaturedIds(profileRes.data.featured_exercise_ids || []);
+        try {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user) return;
+            setEmail(user.email ?? "");
             
-            if (profileRes.data.language && profileRes.data.language !== i18n.language) {
-                i18n.changeLanguage(profileRes.data.language);
-            }
-        }
+            const [profileRes, exercisesRes] = await Promise.all([
+                supabase.from("profiles").select("*").eq("id", user.id).single(),
+                supabase.from("exercises").select("id, name").eq("user_id", user.id)
+            ]);
 
-        if (exercisesRes.data) {
-            setExercises(exercisesRes.data.sort((a, b) => a.name.localeCompare(b.name)));
+            if (profileRes.error && profileRes.error.code !== "PGRST116") {
+                console.error("Profile load error:", profileRes.error);
+                setError(profileRes.error.message);
+            }
+
+            if (profileRes.data) {
+                setFullName(profileRes.data.full_name ?? "");
+                setDob(profileRes.data.date_of_birth ?? "");
+                setBodyweight(profileRes.data.bodyweight?.toString() ?? "");
+                setGender(profileRes.data.gender ?? "other");
+                setAvatar(profileRes.data.avatar_url ?? null);
+                setFeaturedIds(profileRes.data.featured_exercise_ids || []);
+                
+                if (profileRes.data.language && profileRes.data.language !== i18n.language) {
+                    i18n.changeLanguage(profileRes.data.language);
+                }
+            }
+
+            if (exercisesRes.data) {
+                setExercises(exercisesRes.data.sort((a, b) => a.name.localeCompare(b.name)));
+            }
+        } catch (e: any) {
+            console.error("Load Profile failed:", e);
+            setError(e.message);
+        } finally {
+            setLoading(false);
         }
-        setLoading(false);
     }
 
     async function updateLanguage(lang: string) {
@@ -130,27 +147,37 @@ export default function Profile() {
         if (dobErr) { setError(dobErr); return; }
 
         setSaving(true);
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return;
+        try {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user) return;
 
-        let avatarUrl = avatar;
-        if (avatar && (avatar.startsWith("file") || avatar.startsWith("data:") || avatar.startsWith("content:"))) {
-            avatarUrl = await uploadAvatar(user.id, avatar);
-        }
+            let avatarUrl = avatar;
+            if (avatar && (avatar.startsWith("file") || avatar.startsWith("data:") || avatar.startsWith("content:"))) {
+                avatarUrl = await uploadAvatar(user.id, avatar);
+            }
 
-        const { error: updateError } = await supabase.from("profiles").update({ 
-            full_name: fullName, 
-            date_of_birth: dob, 
-            avatar_url: avatarUrl,
-            featured_exercise_ids: featuredIds
-        }).eq("id", user.id);
+            const { error: updateError } = await supabase.from("profiles").update({ 
+                full_name: fullName, 
+                date_of_birth: dob, 
+                bodyweight: parseFloat(bodyweight) || null,
+                gender: gender,
+                avatar_url: avatarUrl,
+                featured_exercise_ids: featuredIds
+            }).eq("id", user.id);
 
-        setSaving(false);
-        if (updateError) setError(updateError.message);
-        else { 
-            setAvatar(avatarUrl); 
-            setEditing(false); 
-            loadProfile();
+            if (updateError) {
+                console.error("Profile update error:", updateError);
+                setError(updateError.message);
+            } else { 
+                setAvatar(avatarUrl); 
+                setEditing(false); 
+                loadProfile();
+            }
+        } catch (e: any) {
+            console.error("Save Profile failed:", e);
+            setError(e.message);
+        } finally {
+            setSaving(false);
         }
     }
 
@@ -245,6 +272,38 @@ export default function Profile() {
                     </View>
                     <View style={[styles.divider, { backgroundColor: colors.border }]} />
                     <View style={styles.field}>
+                        <Text style={[styles.label, { color: colors.accentText }]}>Bodyweight (kg)</Text>
+                        <TextInput
+                            style={[styles.input, { color: colors.text }, !editing && { color: colors.secondaryText }]}
+                            value={bodyweight}
+                            onChangeText={setBodyweight}
+                            editable={editing}
+                            placeholder="70.0"
+                            placeholderTextColor={colors.accentText}
+                            keyboardType="decimal-pad"
+                        />
+                    </View>
+                    <View style={[styles.divider, { backgroundColor: colors.border }]} />
+                    <View style={styles.field}>
+                        <Text style={[styles.label, { color: colors.accentText }]}>Gender</Text>
+                        {editing ? (
+                            <View style={styles.genderRow}>
+                                {["male", "female", "other"].map((g) => (
+                                    <Pressable 
+                                        key={g} 
+                                        onPress={() => setGender(g as any)}
+                                        style={[styles.genderBtn, gender === g && { backgroundColor: colors.tint }]}
+                                    >
+                                        <Text style={[styles.genderText, gender === g && { color: "#FFF" }]}>{g.toUpperCase()}</Text>
+                                    </Pressable>
+                                ))}
+                            </View>
+                        ) : (
+                            <Text style={[styles.input, { color: colors.secondaryText }]}>{gender.toUpperCase()}</Text>
+                        )}
+                    </View>
+                    <View style={[styles.divider, { backgroundColor: colors.border }]} />
+                    <View style={styles.field}>
                         <Text style={[styles.label, { color: colors.accentText }]}>{t("app.profile.email")}</Text>
                         <Text style={[styles.input, { color: colors.secondaryText, paddingVertical: 14 }]}>{email}</Text>
                     </View>
@@ -308,6 +367,22 @@ export default function Profile() {
                         onPress={() => setThemeMode("dark")}
                     >
                         <Text style={[styles.choiceBtnText, { color: colors.secondaryText }, themeMode === "dark" && { color: colors.background }]}>{t("app.profile.theme_dark")}</Text>
+                    </Pressable>
+                </View>
+
+                <Text style={[styles.sectionTitle, { color: colors.accentText, marginTop: 12 }]}>Plate Preference</Text>
+                <View style={styles.choiceContainer}>
+                    <Pressable 
+                        style={[styles.choiceBtn, { borderColor: colors.border }, plateType === 20 && { backgroundColor: colors.primary, borderColor: colors.primary }]} 
+                        onPress={() => setPlateType(20)}
+                    >
+                        <Text style={[styles.choiceBtnText, { color: colors.secondaryText }, plateType === 20 && { color: colors.background }]}>BLUE (20kg)</Text>
+                    </Pressable>
+                    <Pressable 
+                        style={[styles.choiceBtn, { borderColor: colors.border }, plateType === 25 && { backgroundColor: colors.primary, borderColor: colors.primary }]} 
+                        onPress={() => setPlateType(25)}
+                    >
+                        <Text style={[styles.choiceBtnText, { color: colors.secondaryText }, plateType === 25 && { color: colors.background }]}>RED (25kg)</Text>
                     </Pressable>
                 </View>
 
@@ -390,6 +465,24 @@ const styles = StyleSheet.create({
     label: { fontSize: 11, fontWeight: "700", textTransform: "uppercase", marginBottom: 4 },
     input: { fontSize: 16, padding: 0 },
     divider: { height: 1 },
+    genderRow: {
+        flexDirection: "row",
+        gap: 8,
+        marginTop: 8,
+    },
+    genderBtn: {
+        flex: 1,
+        height: 32,
+        borderRadius: 16,
+        justifyContent: "center",
+        alignItems: "center",
+        backgroundColor: "rgba(128,128,128,0.1)",
+    },
+    genderText: {
+        fontSize: 10,
+        fontWeight: "800",
+        color: "#888",
+    },
 
     exercisePickRow: {
         flexDirection: "row",

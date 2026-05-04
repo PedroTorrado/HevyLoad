@@ -5,6 +5,7 @@ import "./../lib/i18n";
 import { supabase } from "../lib/supabase";
 import { StatusBar } from "expo-status-bar";
 import { ThemeProvider, useTheme } from "../lib/theme";
+import { PreferencesProvider } from "../lib/preferences";
 
 function RootLayoutNav() {
     const [session, setSession] = useState<Session | null>(null);
@@ -54,7 +55,9 @@ function RootLayoutNav() {
 export default function RootLayout() {
     return (
         <ThemeProvider>
-            <RootLayoutNav />
+            <PreferencesProvider>
+                <RootLayoutNav />
+            </PreferencesProvider>
         </ThemeProvider>
     );
 }

@@ -22,7 +22,7 @@ interface Workout {
     start_time: string;
     end_time: string | null;
     description: string | null;
-    exercises_count?: number;
+    sets_count?: number;
 }
 
 export default function History() {
@@ -35,6 +35,12 @@ export default function History() {
     const hasLoaded = useRef(false);
     const [workouts, setWorkouts] = useState<Workout[]>([]);
     const [selectedMonth, setSelectedMonth] = useState(new Date());
+    const [comparisonData, setComparisonData] = useState<{
+        prevMonthWorkouts: number;
+        prevMonthSets: number;
+        currMonthSets: number;
+        trainingSplit: Record<string, number>;
+    } | null>(null);
 
     // Generate last 12 months for the filter
     const monthFilterOptions = eachMonthOfInterval({
@@ -61,6 +67,7 @@ export default function History() {
         const monthStart = startOfMonth(selectedMonth).toISOString();
         const monthEnd = endOfMonth(selectedMonth).toISOString();
 
+        // 1. Load workouts for current month with muscle group data
         const { data: workoutsData, error } = await supabase
             .from("workouts")
             .select(`
@@ -68,7 +75,8 @@ export default function History() {
                 title, 
                 start_time, 
                 end_time, 
-                description
+                description,
+                sets:sets(count, exercise:exercises(muscle_group))
             `)
             .eq("user_id", user.id)
             .gte("start_time", monthStart)
@@ -78,10 +86,158 @@ export default function History() {
         if (error) {
             console.error("Error loading workouts:", error);
         } else {
-            setWorkouts(workoutsData || []);
+            const split: Record<string, number> = {};
+            const formattedWorkouts = (workoutsData || []).map((w: any) => {
+                let sCount = 0;
+                w.sets.forEach((s: any) => {
+                    sCount += s.count;
+                    const mg = s.exercise?.muscle_group || "Other";
+                    split[mg] = (split[mg] || 0) + s.count;
+                });
+                return {
+                    ...w,
+                    sets_count: sCount
+                };
+            });
+            setWorkouts(formattedWorkouts);
+
+            // 2. Load comparison data (Previous Month)
+            const prevMonth = subMonths(selectedMonth, 1);
+            const prevStart = startOfMonth(prevMonth).toISOString();
+            const prevEnd = endOfMonth(prevMonth).toISOString();
+
+            const [prevRes] = await Promise.all([
+                supabase.from("workouts").select("id, sets(count)").eq("user_id", user.id).gte("start_time", prevStart).lte("start_time", prevEnd)
+            ]);
+            
+            const currMonthSets = formattedWorkouts.reduce((acc, w) => acc + (w.sets_count || 0), 0);
+            const prevMonthWorkouts = prevRes.data?.length || 0;
+            const prevMonthSets = (prevRes.data || []).reduce((acc: number, w: any) => acc + (w.sets?.[0]?.count || 0), 0);
+
+            setComparisonData({
+                prevMonthWorkouts,
+                prevMonthSets,
+                currMonthSets,
+                trainingSplit: split
+            });
         }
 
         setLoading(false);
+    }
+
+    const renderInsights = () => {
+        if (!comparisonData) return null;
+
+        const isCurrentMonth = isSameMonth(selectedMonth, new Date());
+        const today = new Date();
+        const daysInMonth = 30; // Approximation
+        const daysElapsed = isCurrentMonth ? today.getDate() : daysInMonth;
+        
+        const workoutsCount = workouts.length;
+        const setsCount = comparisonData.currMonthSets;
+
+        const workoutPace = (workoutsCount / daysElapsed) * 7; // workouts/week
+        const prevWorkoutPace = (comparisonData.prevMonthWorkouts / 30) * 7;
+        const workoutChange = prevWorkoutPace > 0 ? ((workoutPace - prevWorkoutPace) / prevWorkoutPace) * 100 : 0;
+
+        const setPace = (setsCount / daysElapsed) * 7; // sets/week
+        const prevSetPace = (comparisonData.prevMonthSets / 30) * 7;
+        const setChange = prevSetPace > 0 ? ((setPace - prevSetPace) / prevSetPace) * 100 : 0;
+
+        const project = (val: number) => Math.round((val / daysElapsed) * 30);
+
+        return (
+            <View style={[styles.insightsCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <View style={styles.insightsHeader}>
+                    <Text style={[styles.insightsTitle, { color: colors.text }]}>Monthly Insights</Text>
+                    {isCurrentMonth && (
+                        <View style={styles.liveBadge}>
+                            <View style={styles.liveDot} />
+                            <Text style={styles.liveText}>LIVE</Text>
+                        </View>
+                    )}
+                </View>
+
+                <View style={styles.insightsGrid}>
+                    <View style={styles.insightItem}>
+                        <Text style={[styles.insightLabel, { color: colors.secondaryText }]}>Consistency</Text>
+                        <Text style={[styles.insightValue, { color: colors.text }]}>{workoutPace.toFixed(1)} <Text style={styles.insightUnit}>w/wk</Text></Text>
+                        <View style={styles.deltaRow}>
+                            <Ionicons 
+                                name={workoutChange >= 0 ? "arrow-up" : "arrow-down"} 
+                                size={12} 
+                                color={workoutChange >= 0 ? colors.tint : colors.error} 
+                            />
+                            <Text style={[styles.deltaText, { color: workoutChange >= 0 ? colors.tint : colors.error }]}>
+                                {Math.abs(workoutChange).toFixed(0)}%
+                            </Text>
+                        </View>
+                        {isCurrentMonth && (
+                            <Text style={[styles.projectionText, { color: colors.secondaryText }]}>
+                                Proj: {project(workoutsCount)} workouts
+                            </Text>
+                        )}
+                    </View>
+
+                    <View style={[styles.dividerVertical, { backgroundColor: colors.border }]} />
+
+                    <View style={styles.insightItem}>
+                        <Text style={[styles.insightLabel, { color: colors.secondaryText }]}>Volume</Text>
+                        <Text style={[styles.insightValue, { color: colors.text }]}>{setPace.toFixed(0)} <Text style={styles.insightUnit}>sets/wk</Text></Text>
+                        <View style={styles.deltaRow}>
+                            <Ionicons 
+                                name={setChange >= 0 ? "arrow-up" : "arrow-down"} 
+                                size={12} 
+                                color={setChange >= 0 ? colors.tint : colors.error} 
+                            />
+                            <Text style={[styles.deltaText, { color: setChange >= 0 ? colors.tint : colors.error }]}>
+                                {Math.abs(setChange).toFixed(0)}%
+                            </Text>
+                        </View>
+                        {isCurrentMonth && (
+                            <Text style={[styles.projectionText, { color: colors.secondaryText }]}>
+                                Proj: {project(setsCount)} sets
+                            </Text>
+                        )}
+                    </View>
+                </View>
+
+                {/* Training Split Section */}
+                {Object.keys(comparisonData.trainingSplit).length > 0 && (
+                    <View style={styles.splitSection}>
+                        <Text style={[styles.insightLabel, { color: colors.secondaryText, marginBottom: 8 }]}>Training Split</Text>
+                        <View style={styles.splitList}>
+                            {Object.entries(comparisonData.trainingSplit)
+                                .sort((a, b) => b[1] - a[1])
+                                .map(([mg, count]) => (
+                                    <View key={mg} style={styles.splitItem}>
+                                        <View style={styles.splitMeta}>
+                                            <View style={[styles.splitDot, { backgroundColor: getMuscleColor(mg) }]} />
+                                            <Text style={[styles.splitName, { color: colors.text }]}>{mg}</Text>
+                                        </View>
+                                        <Text style={[styles.splitValue, { color: colors.secondaryText }]}>
+                                            {count} sets ({Math.round((count / setsCount) * 100)}%)
+                                        </Text>
+                                    </View>
+                                ))
+                            }
+                        </View>
+                    </View>
+                )}
+            </View>
+        );
+    };
+
+    function getMuscleColor(mg: string) {
+        const colors: Record<string, string> = {
+            "Chest": "#90caf9",
+            "Back": "#66bb6a",
+            "Legs": "#f48fb1",
+            "Shoulders": "#ce93d8",
+            "Arms": "#ffcc80",
+            "Other": "#b0bec5"
+        };
+        return colors[mg] || colors["Other"];
     }
 
     const handleBack = () => {
@@ -182,6 +338,7 @@ export default function History() {
                     renderItem={renderWorkoutItem}
                     keyExtractor={(item) => item.id}
                     contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + 20 }]}
+                    ListHeaderComponent={renderInsights}
                     ListEmptyComponent={
                         <View style={styles.emptyState}>
                             <Ionicons name="calendar-outline" size={64} color={colors.border} />
@@ -223,6 +380,120 @@ const styles = StyleSheet.create({
     },
     monthTabText: { fontSize: 14, fontWeight: "600" },
     activeMonthText: { fontWeight: "800" },
+
+    insightsCard: {
+        padding: 16,
+        borderRadius: 16,
+        borderWidth: 1,
+        marginBottom: 16,
+    },
+    insightsHeader: {
+        flexDirection: "row",
+        justifyContent: "space-between",
+        alignItems: "center",
+        marginBottom: 16,
+    },
+    insightsTitle: {
+        fontSize: 14,
+        fontWeight: "800",
+        fontFamily: "System",
+    },
+    liveBadge: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 4,
+        backgroundColor: "rgba(255,59,48,0.1)",
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        borderRadius: 4,
+    },
+    liveDot: {
+        width: 6,
+        height: 6,
+        borderRadius: 3,
+        backgroundColor: "#FF3B30",
+    },
+    liveText: {
+        fontSize: 9,
+        fontWeight: "900",
+        color: "#FF3B30",
+    },
+    insightsGrid: {
+        flexDirection: "row",
+        alignItems: "center",
+    },
+    insightItem: {
+        flex: 1,
+    },
+    insightLabel: {
+        fontSize: 10,
+        fontWeight: "700",
+        textTransform: "uppercase",
+        marginBottom: 4,
+    },
+    insightValue: {
+        fontSize: 20,
+        fontWeight: "900",
+        fontFamily: "System",
+    },
+    insightUnit: {
+        fontSize: 12,
+        fontWeight: "600",
+        opacity: 0.6,
+    },
+    deltaRow: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 2,
+        marginTop: 2,
+    },
+    deltaText: {
+        fontSize: 11,
+        fontWeight: "800",
+    },
+    projectionText: {
+        fontSize: 10,
+        fontWeight: "600",
+        marginTop: 4,
+        fontStyle: "italic",
+    },
+    dividerVertical: {
+        width: 1,
+        height: "80%",
+        marginHorizontal: 16,
+    },
+    splitSection: {
+        marginTop: 20,
+        paddingTop: 16,
+        borderTopWidth: 1,
+        borderTopColor: "rgba(128,128,128,0.1)",
+    },
+    splitList: {
+        gap: 8,
+    },
+    splitItem: {
+        flexDirection: "row",
+        justifyContent: "space-between",
+        alignItems: "center",
+    },
+    splitMeta: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 8,
+    },
+    splitDot: {
+        width: 8,
+        height: 8,
+        borderRadius: 4,
+    },
+    splitName: {
+        fontSize: 12,
+        fontWeight: "700",
+    },
+    splitValue: {
+        fontSize: 11,
+        fontWeight: "600",
+    },
 
     listContent: { padding: 16, gap: 12 },
     workoutCard: {
