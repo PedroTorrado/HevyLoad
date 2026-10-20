@@ -1,5 +1,5 @@
 import { useRouter } from "expo-router";
-import { Image, Pressable, StyleSheet, Text, View } from "react-native";
+import { Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useTranslation } from "react-i18next";
 
 function Logo() {
@@ -17,7 +17,8 @@ export default function Welcome() {
   const { t } = useTranslation();
 
   return (
-    <View style={styles.container}>
+  <ScrollView contentContainerStyle={styles.scrollContent}>
+  <View style={styles.container}>
       <View style={styles.pageFrame}>
         <View style={styles.centered}>
           <Logo />
@@ -36,16 +37,22 @@ export default function Welcome() {
         </View>
       </View>
     </View>
+  </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
+  scrollContent: {
+    flexGrow: 1,
     justifyContent: "center",
     alignItems: "center",
     backgroundColor: "#FFFFFF",
-    paddingHorizontal: 32,
+    paddingHorizontal: 24,
+    paddingVertical: 32,
+  },
+  container: {
+    width: "100%",
+    maxWidth: 560,
   },
   pageFrame: {
     width: "100%",

@@ -345,13 +345,13 @@ export default function ExerciseDetails() {
       yAxisTextStyle: {
         color: colors.secondaryText,
         fontSize: 10,
-        fontWeight: "bold",
+        fontWeight: "bold" as const,
       },
       xAxisLabelTextStyle: {
         color: colors.secondaryText,
         fontSize: 9,
         width: 80,
-        textAlign: "center",
+        textAlign: "center" as const,
       },
       rotateLabel: true,
       labelRotation: -45,
@@ -545,7 +545,7 @@ export default function ExerciseDetails() {
                 activePointerItem?.isWeightPR) && (
                 <View style={styles.prBadge}>
                   <Ionicons name="trophy" size={10} color="#FFD700" />
-                  <Text style={styles.prBadgeText}>NEW PR</Text>
+                  <Text style={styles.prBadgeText}>{t("app.exercise.new_pr")}</Text>
                 </View>
               )}
             </View>
@@ -755,7 +755,7 @@ export default function ExerciseDetails() {
   if (!exercise)
     return (
       <View style={[styles.center, { backgroundColor: colors.background }]}>
-        <Text style={{ color: colors.text }}>Exercise not found</Text>
+        <Text style={{ color: colors.text }}>{t("app.exercise.not_found")}</Text>
       </View>
     );
 

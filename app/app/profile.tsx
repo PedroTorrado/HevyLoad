@@ -272,7 +272,7 @@ export default function Profile() {
                     </View>
                     <View style={[styles.divider, { backgroundColor: colors.border }]} />
                     <View style={styles.field}>
-                        <Text style={[styles.label, { color: colors.accentText }]}>Bodyweight (kg)</Text>
+                        <Text style={[styles.label, { color: colors.accentText }]}>{t("app.profile.bodyweight")}</Text>
                         <TextInput
                             style={[styles.input, { color: colors.text }, !editing && { color: colors.secondaryText }]}
                             value={bodyweight}
@@ -285,7 +285,7 @@ export default function Profile() {
                     </View>
                     <View style={[styles.divider, { backgroundColor: colors.border }]} />
                     <View style={styles.field}>
-                        <Text style={[styles.label, { color: colors.accentText }]}>Gender</Text>
+                        <Text style={[styles.label, { color: colors.accentText }]}>{t("app.profile.gender")}</Text>
                         {editing ? (
                             <View style={styles.genderRow}>
                                 {["male", "female", "other"].map((g) => (
@@ -311,7 +311,7 @@ export default function Profile() {
 
                 {editing && (
                     <>
-                        <Text style={[styles.sectionTitle, { color: colors.accentText, marginTop: 12 }]}>Featured Lifts (Dashboard)</Text>
+                        <Text style={[styles.sectionTitle, { color: colors.accentText, marginTop: 12 }]}>{t("app.profile.featured_lifts")}</Text>
                         <View style={[styles.card, { backgroundColor: colors.background, borderColor: colors.border, marginTop: 16 }]}>
                             <ScrollView style={{ maxHeight: 200 }}>
                                 {exercises.map((ex) => {
@@ -370,7 +370,7 @@ export default function Profile() {
                     </Pressable>
                 </View>
 
-                <Text style={[styles.sectionTitle, { color: colors.accentText, marginTop: 12 }]}>Plate Preference</Text>
+                <Text style={[styles.sectionTitle, { color: colors.accentText, marginTop: 12 }]}>{t("app.profile.plate_preference")}</Text>
                 <View style={styles.choiceContainer}>
                     <Pressable 
                         style={[styles.choiceBtn, { borderColor: colors.border }, plateType === 20 && { backgroundColor: colors.primary, borderColor: colors.primary }]} 
@@ -498,7 +498,7 @@ const styles = StyleSheet.create({
     saveBtn: { paddingVertical: 16, borderRadius: 8, alignItems: "center", marginBottom: 32 },
     saveBtnText: { fontWeight: "700", fontSize: 16 },
 
-    choiceContainer: { flexDirection: "row", gap: 10, marginTop: 16, marginBottom: 32 },
+    choiceContainer: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 16, marginBottom: 32 },
     choiceBtn: { flex: 1, paddingVertical: 12, alignItems: "center", borderRadius: 8, borderWidth: 1 },
     choiceBtnText: { fontSize: 14, fontWeight: "600" },
 

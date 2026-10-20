@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter, useFocusEffect } from "expo-router";
-import { useCallback, useState, useRef, useEffect } from "react";
+import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { 
     ActivityIndicator, 
@@ -8,8 +8,7 @@ import {
     Pressable, 
     StyleSheet, 
     Text, 
-    View, 
-    Platform 
+    View
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "../../lib/supabase";
@@ -32,7 +31,6 @@ export default function History() {
     const colors = useThemeColor();
 
     const [loading, setLoading] = useState(false);
-    const hasLoaded = useRef(false);
     const [workouts, setWorkouts] = useState<Workout[]>([]);
     const [selectedMonth, setSelectedMonth] = useState(new Date());
     const [comparisonData, setComparisonData] = useState<{
@@ -47,82 +45,123 @@ export default function History() {
         start: subMonths(new Date(), 11),
         end: new Date()
     }).reverse();
+    if (!monthFilterOptions.some((month) => isSameMonth(month, selectedMonth))) {
+        monthFilterOptions.push(selectedMonth);
+        monthFilterOptions.sort((a, b) => b.getTime() - a.getTime());
+    }
 
     useFocusEffect(
         useCallback(() => {
-            loadWorkouts(false);
+            loadWorkouts(true);
         }, [selectedMonth])
     );
 
-    useEffect(() => {
-        loadWorkouts(true);
-        hasLoaded.current = true;
-    }, [selectedMonth]);
-
     async function loadWorkouts(showLoader: boolean) {
         if (showLoader && workouts.length === 0) setLoading(true);
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return;
+        try {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user) return;
 
-        const monthStart = startOfMonth(selectedMonth).toISOString();
-        const monthEnd = endOfMonth(selectedMonth).toISOString();
-
-        // 1. Load workouts for current month with muscle group data
-        const { data: workoutsData, error } = await supabase
-            .from("workouts")
-            .select(`
-                id, 
-                title, 
-                start_time, 
-                end_time, 
-                description,
-                sets:sets(count, exercise:exercises(muscle_group))
-            `)
-            .eq("user_id", user.id)
-            .gte("start_time", monthStart)
-            .lte("start_time", monthEnd)
-            .order("start_time", { ascending: false });
-
-        if (error) {
-            console.error("Error loading workouts:", error);
-        } else {
-            const split: Record<string, number> = {};
-            const formattedWorkouts = (workoutsData || []).map((w: any) => {
-                let sCount = 0;
-                w.sets.forEach((s: any) => {
-                    sCount += s.count;
-                    const mg = s.exercise?.muscle_group || "Other";
-                    split[mg] = (split[mg] || 0) + s.count;
-                });
-                return {
-                    ...w,
-                    sets_count: sCount
-                };
-            });
-            setWorkouts(formattedWorkouts);
-
-            // 2. Load comparison data (Previous Month)
+            const monthStart = startOfMonth(selectedMonth).toISOString();
+            const monthEnd = endOfMonth(selectedMonth).toISOString();
             const prevMonth = subMonths(selectedMonth, 1);
             const prevStart = startOfMonth(prevMonth).toISOString();
             const prevEnd = endOfMonth(prevMonth).toISOString();
 
-            const [prevRes] = await Promise.all([
-                supabase.from("workouts").select("id, sets(count)").eq("user_id", user.id).gte("start_time", prevStart).lte("start_time", prevEnd)
+            const [currentRes, previousRes] = await Promise.all([
+                supabase
+                    .from("workouts")
+                    .select("id, title, start_time, end_time, description")
+                    .eq("user_id", user.id)
+                    .gte("start_time", monthStart)
+                    .lte("start_time", monthEnd)
+                    .order("start_time", { ascending: false }),
+                supabase
+                    .from("workouts")
+                    .select("id, sets(count)")
+                    .eq("user_id", user.id)
+                    .gte("start_time", prevStart)
+                    .lte("start_time", prevEnd),
             ]);
-            
-            const currMonthSets = formattedWorkouts.reduce((acc, w) => acc + (w.sets_count || 0), 0);
-            const prevMonthWorkouts = prevRes.data?.length || 0;
-            const prevMonthSets = (prevRes.data || []).reduce((acc: number, w: any) => acc + (w.sets?.[0]?.count || 0), 0);
 
-            setComparisonData({
-                prevMonthWorkouts,
-                prevMonthSets,
-                currMonthSets,
-                trainingSplit: split
+            if (currentRes.error) {
+                console.error("Error loading current workouts:", currentRes.error);
+                setWorkouts([]);
+                setComparisonData(null);
+                return;
+            }
+            if (previousRes.error) {
+                console.error("Error loading previous workouts:", previousRes.error);
+            }
+
+            // Keep the list query independent from the nested set analytics query.
+            // This prevents a relationship/aggregate error from hiding valid workouts.
+            let currentSets: any[] = [];
+            const currentWorkoutIds = (currentRes.data || []).map((workout) => workout.id);
+            if (currentWorkoutIds.length > 0) {
+                const setsRes = await supabase
+                    .from("sets")
+                    .select("workout_id, exercise:exercises(muscle_group)")
+                    .in("workout_id", currentWorkoutIds);
+
+                if (setsRes.error) {
+                    console.error("Error loading history sets:", setsRes.error);
+                } else {
+                    currentSets = setsRes.data || [];
+                }
+            } else {
+                // Imported exports often contain older workouts than the current
+                // month. Open the latest available month instead of showing a
+                // misleading empty history by default.
+                const latestRes = await supabase
+                    .from("workouts")
+                    .select("start_time")
+                    .eq("user_id", user.id)
+                    .order("start_time", { ascending: false })
+                    .limit(1)
+                    .maybeSingle();
+
+                if (latestRes.error) {
+                    console.error("Error loading latest workout:", latestRes.error);
+                } else if (latestRes.data) {
+                    const latestMonth = startOfMonth(new Date(latestRes.data.start_time));
+                    if (!isSameMonth(latestMonth, selectedMonth)) {
+                        setSelectedMonth(latestMonth);
+                        return;
+                    }
+                }
+            }
+
+            const split: Record<string, number> = {};
+            const formattedWorkouts = (currentRes.data || []).map((w: any) => {
+                let sCount = 0;
+                currentSets
+                    .filter((set) => set.workout_id === w.id)
+                    .forEach((set: any) => {
+                        const count = 1;
+                        sCount += count;
+                        const muscleGroup = Array.isArray(set.exercise) ? set.exercise[0]?.muscle_group : set.exercise?.muscle_group;
+                        const mg = muscleGroup || "Other";
+                        split[mg] = (split[mg] || 0) + count;
+                    });
+                return { ...w, sets_count: sCount };
             });
-        }
+            setWorkouts(formattedWorkouts);
 
-        setLoading(false);
+            const previousWorkouts = previousRes.data || [];
+            setComparisonData({
+                prevMonthWorkouts: previousWorkouts.length,
+                prevMonthSets: previousWorkouts.reduce((acc: number, w: any) => acc + (Number(w.sets?.[0]?.count) || 0), 0),
+                currMonthSets: formattedWorkouts.reduce((acc, w) => acc + (w.sets_count || 0), 0),
+                trainingSplit: split,
+            });
+        } catch (error) {
+            console.error("History load error:", error);
+            setWorkouts([]);
+            setComparisonData(null);
+        } finally {
+            setLoading(false);
+        }
     }
 
     const renderInsights = () => {
@@ -149,19 +188,19 @@ export default function History() {
         return (
             <View style={[styles.insightsCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
                 <View style={styles.insightsHeader}>
-                    <Text style={[styles.insightsTitle, { color: colors.text }]}>Monthly Insights</Text>
+                    <Text style={[styles.insightsTitle, { color: colors.text }]}>{t("app.history_insights.title")}</Text>
                     {isCurrentMonth && (
                         <View style={styles.liveBadge}>
                             <View style={styles.liveDot} />
-                            <Text style={styles.liveText}>LIVE</Text>
+                            <Text style={styles.liveText}>{t("app.history_insights.live")}</Text>
                         </View>
                     )}
                 </View>
 
                 <View style={styles.insightsGrid}>
                     <View style={styles.insightItem}>
-                        <Text style={[styles.insightLabel, { color: colors.secondaryText }]}>Consistency</Text>
-                        <Text style={[styles.insightValue, { color: colors.text }]}>{workoutPace.toFixed(1)} <Text style={styles.insightUnit}>w/wk</Text></Text>
+                        <Text style={[styles.insightLabel, { color: colors.secondaryText }]}>{t("app.history_insights.consistency")}</Text>
+                        <Text style={[styles.insightValue, { color: colors.text }]}>{workoutPace.toFixed(1)} <Text style={styles.insightUnit}>{t("app.history_insights.workouts_per_week")}</Text></Text>
                         <View style={styles.deltaRow}>
                             <Ionicons 
                                 name={workoutChange >= 0 ? "arrow-up" : "arrow-down"} 
@@ -174,7 +213,7 @@ export default function History() {
                         </View>
                         {isCurrentMonth && (
                             <Text style={[styles.projectionText, { color: colors.secondaryText }]}>
-                                Proj: {project(workoutsCount)} workouts
+                                {t("app.history_insights.projection_workouts", { count: project(workoutsCount) })}
                             </Text>
                         )}
                     </View>
@@ -182,8 +221,8 @@ export default function History() {
                     <View style={[styles.dividerVertical, { backgroundColor: colors.border }]} />
 
                     <View style={styles.insightItem}>
-                        <Text style={[styles.insightLabel, { color: colors.secondaryText }]}>Volume</Text>
-                        <Text style={[styles.insightValue, { color: colors.text }]}>{setPace.toFixed(0)} <Text style={styles.insightUnit}>sets/wk</Text></Text>
+                        <Text style={[styles.insightLabel, { color: colors.secondaryText }]}>{t("app.history_insights.volume")}</Text>
+                        <Text style={[styles.insightValue, { color: colors.text }]}>{setPace.toFixed(0)} <Text style={styles.insightUnit}>{t("app.history_insights.sets_per_week")}</Text></Text>
                         <View style={styles.deltaRow}>
                             <Ionicons 
                                 name={setChange >= 0 ? "arrow-up" : "arrow-down"} 
@@ -196,7 +235,7 @@ export default function History() {
                         </View>
                         {isCurrentMonth && (
                             <Text style={[styles.projectionText, { color: colors.secondaryText }]}>
-                                Proj: {project(setsCount)} sets
+                                {t("app.history_insights.projection_sets", { count: project(setsCount) })}
                             </Text>
                         )}
                     </View>
@@ -205,7 +244,7 @@ export default function History() {
                 {/* Training Split Section */}
                 {Object.keys(comparisonData.trainingSplit).length > 0 && (
                     <View style={styles.splitSection}>
-                        <Text style={[styles.insightLabel, { color: colors.secondaryText, marginBottom: 8 }]}>Training Split</Text>
+                        <Text style={[styles.insightLabel, { color: colors.secondaryText, marginBottom: 8 }]}>{t("app.history_insights.training_split")}</Text>
                         <View style={styles.splitList}>
                             {Object.entries(comparisonData.trainingSplit)
                                 .sort((a, b) => b[1] - a[1])

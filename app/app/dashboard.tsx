@@ -267,6 +267,13 @@ export default function Dashboard() {
 
     const NAV_ITEMS = [
         {
+            title: t("app.dashboard.modules.suggestions.title"),
+            desc: t("app.dashboard.modules.suggestions.desc"),
+            route: "/app/suggestions",
+            icon: "sparkles" as const,
+            color: "#34C759",
+        },
+        {
             title: t("app.dashboard.modules.analytics.title"),
             desc: t("app.dashboard.modules.analytics.desc"),
             route: "/app/analytics",
@@ -321,7 +328,7 @@ export default function Dashboard() {
                     {stats.powerliftingTotal > 0 && (
                         <View style={[styles.totalBanner, { backgroundColor: colors.card, borderColor: colors.border }]}>
                             <View>
-                                <Text style={[styles.totalLabel, { color: colors.secondaryText }]}>SBD TOTAL</Text>
+                                <Text style={[styles.totalLabel, { color: colors.secondaryText }]}>{t("app.dashboard.sbd_total")}</Text>
                                 <Text style={[styles.totalValue, { color: colors.text }]}>{stats.powerliftingTotal.toLocaleString()} <Text style={styles.unit}>kg</Text></Text>
                             </View>
                             <View style={[styles.totalBadge, { backgroundColor: colors.tint + "20" }]}>
@@ -342,14 +349,14 @@ export default function Dashboard() {
                         </View>
                         <View style={[styles.statCard, { flex: 2, backgroundColor: colors.card }]}>
                             <Text style={[styles.statValue, { color: colors.text }]}>{stats.weeklyTonnage.toLocaleString()} kg</Text>
-                            <Text style={[styles.statLabel, { color: colors.secondaryText }]}>WEEKLY TONNAGE</Text>
+                            <Text style={[styles.statLabel, { color: colors.secondaryText }]}>{t("app.dashboard.weekly_tonnage")}</Text>
                         </View>
                     </View>
 
                     {/* The Big 3 Showdown */}
                     {sbdLifts.length > 0 && (
                         <View style={styles.big3Section}>
-                            <Text style={[styles.sectionTitle, { color: colors.accentText }]}>The Big Three</Text>
+                            <Text style={[styles.sectionTitle, { color: colors.accentText }]}>{t("app.dashboard.big_three")}</Text>
                             <View style={styles.big3Grid}>
                                 {sbdLifts.map((lift) => {
                                     const liftColors: any = {
@@ -381,7 +388,7 @@ export default function Dashboard() {
                     {/* Other Featured Lifts */}
                     {otherLifts.length > 0 && (
                         <View style={styles.maxSection}>
-                            <Text style={[styles.sectionTitle, { color: colors.accentText }]}>Accessories & Highlights</Text>
+                            <Text style={[styles.sectionTitle, { color: colors.accentText }]}>{t("app.dashboard.accessories")}</Text>
                             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.maxGrid}>
                                 {otherLifts.map((lift) => (
                                     <Pressable 
@@ -468,7 +475,7 @@ export default function Dashboard() {
 
 const styles = StyleSheet.create({
     container: { flex: 1 },
-    pageFrame: { paddingHorizontal: 24 },
+    pageFrame: { width: "100%", maxWidth: 1120, alignSelf: "center", paddingHorizontal: 24 },
     
     header: {
         flexDirection: "row",
@@ -495,9 +502,10 @@ const styles = StyleSheet.create({
         borderRadius: 20,
     },
 
-    statsGrid: { flexDirection: "row", gap: 12, marginBottom: 32 },
+    statsGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12, marginBottom: 32 },
     statCard: {
         flex: 1,
+        minWidth: 120,
         padding: 16,
         borderRadius: 16,
     },
@@ -506,6 +514,7 @@ const styles = StyleSheet.create({
 
     totalBanner: {
         flexDirection: "row",
+        flexWrap: "wrap",
         justifyContent: "space-between",
         alignItems: "center",
         padding: 24,
@@ -524,9 +533,10 @@ const styles = StyleSheet.create({
     },
 
     big3Section: { marginBottom: 32 },
-    big3Grid: { flexDirection: "row", gap: 10 },
+    big3Grid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
     big3Card: {
         flex: 1,
+        minWidth: 150,
         padding: 16,
         borderRadius: 16,
         borderWidth: 1.5,

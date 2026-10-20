@@ -51,6 +51,14 @@
       "success": "Check your email for a reset link!",
       "back_to_signin": "← Back to Sign In"
     },
+    "reset_password": {
+      "title": "Choose a new password",
+      "subtitle": "Enter and confirm your new password.",
+      "new_password": "New password",
+      "confirm_password": "Confirm new password",
+      "action": "Update Password",
+      "success": "Your password was updated successfully."
+    },
     "passwordMismatch": "Passwords do not match.",
     "passwordUpdated": "Password updated successfully."
   },
@@ -74,6 +82,10 @@
         "quick_actions": "Quick Actions"
       },
       "modules": {
+        "suggestions": {
+          "title": "Workout suggestions",
+          "desc": "Plan your next split with personalized working loads"
+        },
         "analytics": {
           "title": "Analytics",
           "desc": "Deep dive into your lifting stats."
@@ -86,7 +98,27 @@
           "title": "Full History",
           "desc": "Browse all your logged sessions."
         }
-      }
+      },
+      "import": {
+        "title": "Import Hevy Data",
+        "select_file": "Select CSV/TSV File",
+        "or": "OR",
+        "paste_placeholder": "Paste data here...",
+        "import_data": "Import Data",
+        "clear_all": "Clear All Previous Data",
+        "file_loaded": "File Loaded",
+        "file_loaded_message": "Loaded {{name}}. Click \"Import Data\" to proceed.",
+        "error": "Error",
+        "empty_file": "The selected file appears to be empty.",
+        "empty_data": "Please paste your Hevy export data.",
+        "success": "Success",
+        "import_success": "Data imported successfully!",
+        "clear_success": "All data has been cleared."
+      },
+      "sbd_total": "SBD TOTAL",
+      "weekly_tonnage": "WEEKLY TONNAGE",
+      "big_three": "The Big Three",
+      "accessories": "Accessories & Highlights"
     },
     "history": {
       "title": "History",
@@ -99,7 +131,9 @@
       "start": "Start Time",
       "set": "Set",
       "weight": "Weight",
-      "reps": "Reps"
+      "reps": "Reps",
+      "weight_pr": "WEIGHT PR",
+      "one_rm_pr": "1RM PR"
     },
     "exercises": {
       "title": "Exercises",
@@ -125,7 +159,77 @@
       "camera": "Camera",
       "gallery": "Gallery",
       "deleteAccount": "Delete Account",
-      "deleteAccountConfirm": "This will permanently delete your account. This cannot be undone."
+      "deleteAccountConfirm": "This will permanently delete your account. This cannot be undone.",
+      "bodyweight": "Bodyweight (kg)",
+      "gender": "Gender",
+      "featured_lifts": "Featured Lifts (Dashboard)",
+      "plate_preference": "Plate Preference"
+    },
+    "analytics": {
+      "title": "Analytics",
+      "workout_frequency": "Workout Frequency",
+      "volume_trend": "Volume Trend (1000s kg)",
+      "strength_trend": "Strength Trend (Monthly Powerlifting Total)",
+      "milestones": "Milestones (New PRs)",
+      "view_all": "VIEW ALL",
+      "strength_standards": "Strength Standards (SBD)",
+      "most_frequent": "Most Frequent Exercises",
+      "muscle_distribution": "Muscle Distribution (Sets)",
+      "sets": "sets",
+      "score": "DOTS SCORE",
+      "wilks": "WILKS",
+      "total": "TOTAL",
+      "bodyweight": "BODYWEIGHT",
+      "squat": "SQUAT",
+      "bench": "BENCH",
+      "deadlift": "DEADLIFT"
+    },
+    "history_insights": {
+      "title": "Monthly Insights",
+      "live": "LIVE",
+      "consistency": "Consistency",
+      "volume": "Volume",
+      "training_split": "Training Split",
+      "workouts_per_week": "w/wk",
+      "sets_per_week": "sets/wk",
+      "projection_workouts": "Proj: {{count}} workouts",
+      "projection_sets": "Proj: {{count}} sets"
+    },
+    "milestones": {
+      "title": "All Milestones",
+      "lift": "LIFT",
+      "estimated_1rm": "EST. 1RM",
+      "empty": "No milestones yet. Keep training!"
+    },
+    "suggestions": {
+      "eyebrow": "TRAINING PLANNER",
+      "title": "Workout suggestions",
+      "subtitle": "Follow your rolling four-day powerbuilding split with loads from your Hevy history.",
+      "choose_session": "Choose a session",
+      "rolling_split": "Rolling split · complete A → B → C → D in order",
+      "push_pull_legs": "Push / Pull / Legs",
+      "push": "Push",
+      "pull": "Pull",
+      "legs": "Legs",
+      "push_pull_legs_description": "A focused three-day rotation with enough volume for each muscle group.",
+      "upper_lower": "Upper / Lower",
+      "upper": "Upper",
+      "lower": "Lower",
+      "upper_lower_description": "A simple four-day split that balances frequency and recovery.",
+      "full_body": "Full body",
+      "full_body_description": "A flexible session for training two to four times per week.",
+      "session": "{{split}} session",
+      "working_sets": "Suggested working sets · 3 × 8–10",
+      "add_exercise": "Add an exercise for this muscle group",
+      "no_previous_load": "No previous load · start conservatively",
+      "import_error": "Import a Hevy export or check your Supabase connection, then try again.",
+      "import_first": "Import your Hevy history first",
+      "personalized": "Suggestions become personalized once your exercises and working sets are in Supabase.",
+      "go_back": "Go back"
+    },
+    "exercise": {
+      "not_found": "Exercise not found",
+      "new_pr": "NEW PR"
     }
   }
 }

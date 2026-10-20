@@ -53,7 +53,6 @@ export default function WorkoutDetails() {
     const [loading, setLoading] = useState(true);
     const [workout, setWorkout] = useState<Workout | null>(null);
     const [sets, setSets] = useState<Set[]>([]);
-    const [adjacentWorkouts, setAdjacentWorkouts] = useState<{ prev: string | null, next: string | null }>({ prev: null, next: null });
 
     useFocusEffect(
         useCallback(() => {
@@ -75,31 +74,6 @@ export default function WorkoutDetails() {
 
         if (workoutData) {
             setWorkout(workoutData);
-
-            // Fetch Prev/Next Workouts
-            const [prevRes, nextRes] = await Promise.all([
-                supabase
-                    .from("workouts")
-                    .select("id")
-                    .eq("user_id", user.id)
-                    .lt("start_time", workoutData.start_time)
-                    .order("start_time", { ascending: false })
-                    .limit(1)
-                    .single(),
-                supabase
-                    .from("workouts")
-                    .select("id")
-                    .eq("user_id", user.id)
-                    .gt("start_time", workoutData.start_time)
-                    .order("start_time", { ascending: true })
-                    .limit(1)
-                    .single()
-            ]);
-
-            setAdjacentWorkouts({
-                prev: prevRes.data?.id || null,
-                next: nextRes.data?.id || null
-            });
 
             // Load sets with exercise info
             const { data: setsData } = await supabase
@@ -222,14 +196,6 @@ export default function WorkoutDetails() {
                     <Pressable onPress={handleBack} style={styles.backBtn}>
                         <Ionicons name="chevron-back" size={28} color={colors.text} />
                     </Pressable>
-                    {adjacentWorkouts.prev && (
-                        <Pressable 
-                            onPress={() => router.replace(`/app/workout/${adjacentWorkouts.prev}` as any)}
-                            style={styles.navBtn}
-                        >
-                            <Ionicons name="arrow-back-circle-outline" size={24} color={colors.secondaryText} />
-                        </Pressable>
-                    )}
                 </View>
 
                 <View style={styles.headerInfo}>
@@ -242,14 +208,6 @@ export default function WorkoutDetails() {
                 </View>
 
                 <View style={styles.headerRight}>
-                    {adjacentWorkouts.next && (
-                        <Pressable 
-                            onPress={() => router.replace(`/app/workout/${adjacentWorkouts.next}` as any)}
-                            style={styles.navBtn}
-                        >
-                            <Ionicons name="arrow-forward-circle-outline" size={24} color={colors.secondaryText} />
-                        </Pressable>
-                    )}
                     <Pressable style={styles.backBtn}>
                         <Ionicons name="ellipsis-horizontal" size={24} color={colors.text} />
                     </Pressable>
@@ -301,7 +259,7 @@ export default function WorkoutDetails() {
                                         </Text>
                                         {set.isWeightPR && (
                                             <View style={styles.miniPrBadge}>
-                                                <Text style={styles.miniPrBadgeText}>WEIGHT PR</Text>
+                                                <Text style={styles.miniPrBadgeText}>{t("app.workout.weight_pr")}</Text>
                                             </View>
                                         )}
                                     </View>
@@ -314,7 +272,7 @@ export default function WorkoutDetails() {
                                         </Text>
                                         {set.isPR && (
                                             <View style={[styles.miniPrBadge, { backgroundColor: "#FFD700" }]}>
-                                                <Text style={[styles.miniPrBadgeText, { color: "#000" }]}>1RM PR</Text>
+                                                <Text style={[styles.miniPrBadgeText, { color: "#000" }]}>{t("app.workout.one_rm_pr")}</Text>
                                             </View>
                                         )}
                                     </View>
@@ -350,7 +308,6 @@ const styles = StyleSheet.create({
         width: 80,
     },
     backBtn: { width: 40, height: 40, justifyContent: "center", alignItems: "center" },
-    navBtn: { width: 32, height: 40, justifyContent: "center", alignItems: "center" },
     headerInfo: { flex: 1, alignItems: "center" },
     headerTitle: { fontSize: 16, fontWeight: "800" },
     headerSubtitle: { fontSize: 12, fontWeight: "600" },

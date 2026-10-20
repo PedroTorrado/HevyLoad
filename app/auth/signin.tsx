@@ -1,6 +1,6 @@
 import { useRouter } from "expo-router";
 import { useState } from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import { supabase } from "../../lib/supabase";
 import { isValidEmail } from "../../lib/validation";
@@ -29,7 +29,8 @@ export default function SignIn() {
     }
 
     return (
-        <View style={styles.container}>
+        <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === "ios" ? "padding" : "height"}>
+            <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
             <View style={styles.pageFrame}>
                 <View style={styles.centered}>
                     <Text style={styles.title}>{t("auth.signin.title")}</Text>
@@ -74,12 +75,14 @@ export default function SignIn() {
                     </Pressable>
                 </View>
             </View>
-        </View>
+            </ScrollView>
+            </KeyboardAvoidingView>
     );
 }
 
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: "#FFFFFF", paddingHorizontal: 32 },
+    container: { flex: 1, backgroundColor: "#FFFFFF" },
+    scrollContent: { flexGrow: 1, justifyContent: "center", paddingHorizontal: 24, paddingVertical: 32 },
     pageFrame: { width: "100%", maxWidth: 520, flex: 1, alignSelf: "center" },
     centered: { flex: 1, justifyContent: "center" },
     title: { fontSize: 32, fontWeight: "700", color: "#000", marginBottom: 8, textAlign: "center" },
@@ -96,7 +99,7 @@ const styles = StyleSheet.create({
     buttonText: { color: "#fff", fontSize: 16, fontWeight: "600" },
     error: { color: "#FF3B30", textAlign: "center", marginBottom: 16 },
     forgotText: { fontSize: 14, color: "#666", fontWeight: "500" },
-    footerRow: { flexDirection: "row", justifyContent: "center", marginBottom: 40 },
-    footerText: { fontSize: 14, color: "#666" },
+    footerRow: { flexDirection: "row", flexWrap: "wrap", justifyContent: "center", alignItems: "center", marginBottom: 40, paddingHorizontal: 8 },
+    footerText: { fontSize: 14, color: "#666", textAlign: "center" },
     footerActionText: { fontSize: 14, color: "#000", fontWeight: "700" },
 });
