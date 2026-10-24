@@ -1,8 +1,8 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter, useFocusEffect } from "expo-router";
-import { useCallback, useState, useRef, useEffect } from "react";
+import { useCallback, useState, useRef, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { Pressable, ScrollView, StyleSheet, Text, View, Platform, ActivityIndicator, Image, useColorScheme } from "react-native";
+import { PanResponder, Pressable, ScrollView, StyleSheet, Text, View, Platform, ActivityIndicator, Image, useColorScheme } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "../../lib/supabase";
 import { useThemeColor } from "../../lib/theme";
@@ -10,8 +10,9 @@ import { usePreferences } from "../../lib/preferences";
 import { getLocalYYYYMMDD } from "../../lib/date-utils";
 
 type WorkoutCalendarProps = {
-    workouts: { start_time: string; volume: number; durationMinutes: number }[];
+    workouts: { id: string; start_time: string; volume: number; durationMinutes: number }[];
     colors: ReturnType<typeof useThemeColor>;
+    onWorkoutPress: (workoutId: string) => void;
     title: string;
     lessLabel: string;
     moreLabel: string;
@@ -25,6 +26,7 @@ type WorkoutCalendarProps = {
 function WorkoutCalendar({
     workouts,
     colors,
+    onWorkoutPress,
     title,
     lessLabel,
     moreLabel,
@@ -36,11 +38,16 @@ function WorkoutCalendar({
 }: WorkoutCalendarProps) {
     const [metric, setMetric] = useState<"volume" | "duration">("volume");
     const [selectedPeriod, setSelectedPeriod] = useState<"rolling" | number>("rolling");
+    const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null);
     const workoutTotals = new Map<string, number>();
+    const workoutsByDate = new Map<string, { id: string; start_time: string }[]>();
     workouts.forEach((workout) => {
         const date = getLocalYYYYMMDD(new Date(workout.start_time));
         const value = metric === "volume" ? workout.volume : workout.durationMinutes;
         workoutTotals.set(date, (workoutTotals.get(date) || 0) + value);
+        const dateWorkouts = workoutsByDate.get(date) || [];
+        dateWorkouts.push(workout);
+        workoutsByDate.set(date, dateWorkouts);
     });
 
     const today = new Date();
@@ -81,6 +88,40 @@ function WorkoutCalendar({
         if (intensity <= 0.75) return "#2563EB";
         return "#1E3A8A";
     };
+
+    const getDayAtPoint = (x: number, y: number) => {
+        const weekIndex = Math.floor(x / 17);
+        const dayIndex = Math.floor((y - 16) / 17);
+        const day = weeks[weekIndex]?.[dayIndex];
+        return day && day.date >= rangeStart && day.date <= rangeEnd && workoutsByDate.has(day.key) ? day : null;
+    };
+
+    const panResponder = useMemo(() => PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onPanResponderGrant: (event) => {
+            setSelectedDayKey(getDayAtPoint(event.nativeEvent.locationX, event.nativeEvent.locationY)?.key || null);
+        },
+        onPanResponderMove: (event) => {
+            setSelectedDayKey(getDayAtPoint(event.nativeEvent.locationX, event.nativeEvent.locationY)?.key || null);
+        },
+        onPanResponderRelease: (event) => {
+            setSelectedDayKey(
+                getDayAtPoint(event.nativeEvent.locationX, event.nativeEvent.locationY)?.key
+                || selectedDayKey
+                || null
+            );
+        },
+    }), [onWorkoutPress, selectedDayKey, weeks, workoutsByDate]);
+
+    const selectedDay = weeks.flat().find((day) => day.key === selectedDayKey);
+    const selectedWorkout = selectedDay ? workoutsByDate.get(selectedDay.key)?.[0] : undefined;
+    const selectedDateLabel = selectedDay?.date.toLocaleDateString(undefined, {
+        weekday: "long",
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+    });
 
     return (
         <View style={styles.activitySection}>
@@ -125,6 +166,30 @@ function WorkoutCalendar({
                             </Pressable>
                         ))}
                 </ScrollView>
+                <Pressable
+                    disabled={!selectedWorkout}
+                    onPress={() => selectedWorkout && onWorkoutPress(selectedWorkout.id)}
+                    style={[
+                        styles.activitySelection,
+                        {
+                            borderColor: selectedWorkout ? colors.tint : colors.border,
+                            backgroundColor: selectedWorkout ? colors.secondary : "transparent",
+                        },
+                    ]}
+                >
+                    <View style={styles.activitySelectionHeader}>
+                        <Text style={[styles.activitySelectionDate, { color: selectedWorkout ? colors.tint : colors.text }]}>
+                            {selectedDateLabel || "Select a workout day"}
+                        </Text>
+                        {selectedWorkout && <Ionicons name="arrow-forward-circle" size={17} color={colors.tint} />}
+                    </View>
+                    {selectedDay && (
+                        <Text style={[styles.activitySelectionValue, { color: colors.secondaryText }]}>
+                            {selectedDay.value} {metric === "volume" ? "kg" : "min"}
+                            {selectedWorkout ? " · Tap the date to open workout" : ""}
+                        </Text>
+                    )}
+                </Pressable>
                 <View style={styles.activityGrid}>
                     <View style={styles.activityDayLabels}>
                         <View style={styles.activityMonthSpacer} />
@@ -138,7 +203,7 @@ function WorkoutCalendar({
                         style={styles.activityMatrixScroll}
                         contentContainerStyle={styles.activityMatrixContent}
                     >
-                        <View style={styles.activityWeeks}>
+                        <View style={styles.activityWeeks} {...panResponder.panHandlers}>
                             {weeks.map((week, weekIndex) => {
                                 const firstVisibleDay = week.find((day) => day.date >= rangeStart && day.date <= rangeEnd);
                                 const previousVisibleDay = weeks[weekIndex - 1]?.find(
@@ -155,14 +220,29 @@ function WorkoutCalendar({
                                         {monthLabel}
                                     </Text>
                                     <View style={styles.activityCells}>
-                                        {week.map((day) => (
-                                            <View
+                                        {week.map((day) => {
+                                            const dateWorkouts = workoutsByDate.get(day.key) || [];
+                                            const workout = dateWorkouts[0];
+                                            const isSelectable = day.date >= rangeStart && day.date <= rangeEnd && !!workout;
+                                            return (
+                                            <Pressable
                                                 key={day.key}
                                                 accessible
                                                 accessibilityLabel={`${day.key}: ${day.value} ${metric === "volume" ? "kg volume" : "minutes"}`}
-                                                style={[styles.activityCell, { backgroundColor: getCellColor(day.value) }]}
-                                            />
-                                        ))}
+                                                disabled={!isSelectable}
+                                                hitSlop={6}
+                                                onHoverIn={() => isSelectable && setSelectedDayKey(day.key)}
+                                                onPressIn={() => isSelectable && setSelectedDayKey(day.key)}
+                                                style={styles.activityCellWrapper}
+                                            >
+                                                <View style={[
+                                                    styles.activityCell,
+                                                    selectedDayKey === day.key && styles.activityCellSelected,
+                                                    { backgroundColor: getCellColor(day.value) },
+                                                ]} />
+                                            </Pressable>
+                                            );
+                                        })}
                                     </View>
                                 </View>
                                 );
@@ -259,7 +339,7 @@ export default function Dashboard() {
         powerliftingTotal: 0
     });
     const [recentWorkouts, setRecentWorkouts] = useState<any[]>([]);
-    const [activityWorkouts, setActivityWorkouts] = useState<{ start_time: string; volume: number; durationMinutes: number }[]>([]);
+    const [activityWorkouts, setActivityWorkouts] = useState<{ id: string; start_time: string; volume: number; durationMinutes: number }[]>([]);
     const [sbdLifts, setSbdLifts] = useState<{name: string, value: number, id: string, type: string}[]>([]);
     const [otherLifts, setOtherLifts] = useState<{name: string, value: number, id: string}[]>([]);
 
@@ -369,6 +449,7 @@ export default function Dashboard() {
 
                 if (workoutsWithSets) {
                     setActivityWorkouts(workoutsWithSets.map((workout: any) => ({
+                        id: workout.id,
                         start_time: workout.start_time,
                         volume: (workout.sets || []).reduce((total: number, set: any) =>
                             total + (Number(set.weight_kg) || 0) * (Number(set.reps) || 0), 0),
@@ -594,6 +675,7 @@ export default function Dashboard() {
                                 <WorkoutCalendar
                                     workouts={activityWorkouts}
                                     colors={colors}
+                                    onWorkoutPress={(workoutId) => router.push(`/app/workout/${workoutId}` as any)}
                                     title={t("app.dashboard.activity.title")}
                                     lessLabel={t("app.dashboard.activity.less")}
                                     moreLabel={t("app.dashboard.activity.more")}
@@ -845,6 +927,29 @@ const styles = StyleSheet.create({
         fontSize: 11,
         fontWeight: "600",
     },
+    activitySelection: {
+        minHeight: 38,
+        justifyContent: "center",
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        marginBottom: 8,
+        borderRadius: 6,
+        borderWidth: 1,
+    },
+    activitySelectionDate: {
+        fontSize: 12,
+        fontWeight: "700",
+    },
+    activitySelectionHeader: {
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 8,
+    },
+    activitySelectionValue: {
+        fontSize: 10,
+        marginTop: 2,
+    },
     activityDayLabel: {
         position: "absolute",
         left: 0,
@@ -881,6 +986,18 @@ const styles = StyleSheet.create({
         width: 13,
         height: 13,
         borderRadius: 2,
+    },
+    activityCellSelected: {
+        borderColor: "#FFFFFF",
+        borderWidth: 2,
+    },
+    activityCellWrapper: {
+        position: "relative",
+        width: 13,
+        height: 13,
+        alignItems: "center",
+        justifyContent: "center",
+        overflow: "visible",
     },
     activityLegend: {
         flexDirection: "row",
