@@ -118,7 +118,19 @@
       "sbd_total": "SBD TOTAL",
       "weekly_tonnage": "WEEKLY TONNAGE",
       "big_three": "The Big Three",
-      "accessories": "Accessories & Highlights"
+      "accessories": "Accessories & Highlights",
+      "activity": {
+        "title": "Workout activity",
+        "less": "Less",
+        "more": "More",
+        "monday": "Mon",
+        "wednesday": "Wed",
+        "friday": "Fri",
+        "volume": "Volume",
+        "time": "Time",
+        "rolling": "Last year",
+        "year": "Year"
+      }
     },
     "history": {
       "title": "History",

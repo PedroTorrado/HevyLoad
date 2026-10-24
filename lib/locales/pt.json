@@ -118,7 +118,19 @@
       "sbd_total": "TOTAL SBD",
       "weekly_tonnage": "TONELAGEM SEMANAL",
       "big_three": "Os Três Grandes",
-      "accessories": "Acessórios e Destaques"
+      "accessories": "Acessórios e Destaques",
+      "activity": {
+        "title": "Atividade de treinos",
+        "less": "Menos",
+        "more": "Mais",
+        "monday": "Seg",
+        "wednesday": "Qua",
+        "friday": "Sex",
+        "volume": "Volume",
+        "time": "Tempo",
+        "rolling": "Último ano",
+        "year": "Ano"
+      }
     },
     "history": {
       "title": "Histórico",

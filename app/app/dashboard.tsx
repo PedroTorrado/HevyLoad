@@ -7,6 +7,180 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "../../lib/supabase";
 import { useThemeColor } from "../../lib/theme";
 import { usePreferences } from "../../lib/preferences";
+import { getLocalYYYYMMDD } from "../../lib/date-utils";
+
+type WorkoutCalendarProps = {
+    workouts: { start_time: string; volume: number; durationMinutes: number }[];
+    colors: ReturnType<typeof useThemeColor>;
+    title: string;
+    lessLabel: string;
+    moreLabel: string;
+    weekdayLabels: [string, string, string];
+    volumeLabel: string;
+    timeLabel: string;
+    rollingLabel: string;
+    yearLabel: string;
+};
+
+function WorkoutCalendar({
+    workouts,
+    colors,
+    title,
+    lessLabel,
+    moreLabel,
+    weekdayLabels,
+    volumeLabel,
+    timeLabel,
+    rollingLabel,
+    yearLabel,
+}: WorkoutCalendarProps) {
+    const [metric, setMetric] = useState<"volume" | "duration">("volume");
+    const [selectedPeriod, setSelectedPeriod] = useState<"rolling" | number>("rolling");
+    const workoutTotals = new Map<string, number>();
+    workouts.forEach((workout) => {
+        const date = getLocalYYYYMMDD(new Date(workout.start_time));
+        const value = metric === "volume" ? workout.volume : workout.durationMinutes;
+        workoutTotals.set(date, (workoutTotals.get(date) || 0) + value);
+    });
+
+    const today = new Date();
+    const selectedYear = typeof selectedPeriod === "number" ? selectedPeriod : null;
+    const rangeStart = selectedYear
+        ? new Date(selectedYear, 0, 1)
+        : new Date(today.getFullYear() - 1, today.getMonth(), today.getDate());
+    const rangeEnd = selectedYear ? new Date(selectedYear, 11, 31) : today;
+    rangeStart.setHours(0, 0, 0, 0);
+    rangeEnd.setHours(23, 59, 59, 999);
+    const monday = new Date(rangeStart);
+    monday.setHours(0, 0, 0, 0);
+    const firstDayOfWeek = monday.getDay();
+    monday.setDate(monday.getDate() - (firstDayOfWeek === 0 ? 6 : firstDayOfWeek - 1));
+
+    const currentMonday = new Date(rangeEnd);
+    currentMonday.setHours(0, 0, 0, 0);
+    const currentDayOfWeek = currentMonday.getDay();
+    currentMonday.setDate(currentMonday.getDate() - (currentDayOfWeek === 0 ? 6 : currentDayOfWeek - 1));
+    const weekCount = Math.floor((currentMonday.getTime() - monday.getTime()) / (7 * 24 * 60 * 60 * 1000)) + 1;
+
+    const weeks = Array.from({ length: weekCount }, (_, weekIndex) =>
+        Array.from({ length: 7 }, (_, dayIndex) => {
+            const date = new Date(monday);
+            date.setDate(monday.getDate() + weekIndex * 7 + dayIndex);
+            const key = getLocalYYYYMMDD(date);
+            const isInRange = date >= rangeStart && date <= rangeEnd;
+            return { key, value: isInRange ? workoutTotals.get(key) || 0 : 0, date };
+        })
+    );
+
+    const maxValue = Math.max(...weeks.flat().map((day) => day.value), 1);
+    const getCellColor = (value: number) => {
+        if (value === 0) return colors.secondary;
+        const intensity = value / maxValue;
+        if (intensity <= 0.25) return "#BFDBFE";
+        if (intensity <= 0.5) return "#60A5FA";
+        if (intensity <= 0.75) return "#2563EB";
+        return "#1E3A8A";
+    };
+
+    return (
+        <View style={styles.activitySection}>
+            <Text style={[styles.sectionTitle, { color: colors.accentText }]}>{title}</Text>
+            <View style={[styles.activityCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <View style={styles.activityControls}>
+                    {(["volume", "duration"] as const).map((option) => (
+                        <Pressable
+                            key={option}
+                            onPress={() => setMetric(option)}
+                            style={[
+                                styles.activityToggle,
+                                metric === option && { backgroundColor: colors.tint },
+                            ]}
+                        >
+                            <Text style={[styles.activityToggleText, { color: metric === option ? "#FFF" : colors.secondaryText }]}>
+                                {option === "volume" ? volumeLabel : timeLabel}
+                            </Text>
+                        </Pressable>
+                    ))}
+                </View>
+                <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.activityPeriods}
+                >
+                    <Pressable
+                        onPress={() => setSelectedPeriod("rolling")}
+                        style={[styles.activityPeriod, selectedPeriod === "rolling" && { backgroundColor: colors.secondary }]}
+                    >
+                        <Text style={[styles.activityPeriodText, { color: colors.text }]}>{rollingLabel}</Text>
+                    </Pressable>
+                    {Array.from(new Set(workouts.map((workout) => new Date(workout.start_time).getFullYear())))
+                        .sort((a, b) => b - a)
+                        .map((year) => (
+                            <Pressable
+                                key={year}
+                                onPress={() => setSelectedPeriod(year)}
+                                style={[styles.activityPeriod, selectedPeriod === year && { backgroundColor: colors.secondary }]}
+                            >
+                                <Text style={[styles.activityPeriodText, { color: colors.text }]}>{yearLabel} {year}</Text>
+                            </Pressable>
+                        ))}
+                </ScrollView>
+                <View style={styles.activityGrid}>
+                    <View style={styles.activityDayLabels}>
+                        <View style={styles.activityMonthSpacer} />
+                        <Text style={[styles.activityDayLabel, styles.activityMondayLabel, { color: colors.secondaryText }]}>{weekdayLabels[0]}</Text>
+                        <Text style={[styles.activityDayLabel, styles.activityWednesdayLabel, { color: colors.secondaryText }]}>{weekdayLabels[1]}</Text>
+                        <Text style={[styles.activityDayLabel, styles.activityFridayLabel, { color: colors.secondaryText }]}>{weekdayLabels[2]}</Text>
+                    </View>
+                    <ScrollView
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                        style={styles.activityMatrixScroll}
+                        contentContainerStyle={styles.activityMatrixContent}
+                    >
+                        <View style={styles.activityWeeks}>
+                            {weeks.map((week, weekIndex) => {
+                                const firstVisibleDay = week.find((day) => day.date >= rangeStart && day.date <= rangeEnd);
+                                const previousVisibleDay = weeks[weekIndex - 1]?.find(
+                                    (day) => day.date >= rangeStart && day.date <= rangeEnd
+                                );
+                                const monthLabel = firstVisibleDay &&
+                                    (!previousVisibleDay || firstVisibleDay.date.getMonth() !== previousVisibleDay.date.getMonth())
+                                    ? firstVisibleDay.date.toLocaleString(undefined, { month: "short" })
+                                    : "";
+
+                                return (
+                                <View key={weekIndex} style={styles.activityWeek}>
+                                    <Text style={[styles.activityMonthLabel, { color: colors.secondaryText }]}>
+                                        {monthLabel}
+                                    </Text>
+                                    <View style={styles.activityCells}>
+                                        {week.map((day) => (
+                                            <View
+                                                key={day.key}
+                                                accessible
+                                                accessibilityLabel={`${day.key}: ${day.value} ${metric === "volume" ? "kg volume" : "minutes"}`}
+                                                style={[styles.activityCell, { backgroundColor: getCellColor(day.value) }]}
+                                            />
+                                        ))}
+                                    </View>
+                                </View>
+                                );
+                            })}
+                        </View>
+                    </ScrollView>
+                </View>
+                <View style={styles.activityLegend}>
+                    <Text style={[styles.activityLegendText, { color: colors.secondaryText }]}>{lessLabel}</Text>
+                    {[0, 0.25, 0.5, 0.75, 1].map((level) => (
+                        <View key={level} style={[styles.activityCell, { backgroundColor: level === 0 ? colors.secondary : getCellColor(level * maxValue) }]} />
+                    ))}
+                    <Text style={[styles.activityLegendText, { color: colors.secondaryText }]}>{moreLabel}</Text>
+                </View>
+            </View>
+        </View>
+    );
+}
 
 export default function Dashboard() {
     const router = useRouter();
@@ -85,6 +259,7 @@ export default function Dashboard() {
         powerliftingTotal: 0
     });
     const [recentWorkouts, setRecentWorkouts] = useState<any[]>([]);
+    const [activityWorkouts, setActivityWorkouts] = useState<{ start_time: string; volume: number; durationMinutes: number }[]>([]);
     const [sbdLifts, setSbdLifts] = useState<{name: string, value: number, id: string, type: string}[]>([]);
     const [otherLifts, setOtherLifts] = useState<{name: string, value: number, id: string}[]>([]);
 
@@ -112,7 +287,7 @@ export default function Dashboard() {
             // 1. Fetch Profile, Workouts, and Exercises
             const [profileRes, workoutsRes, exercisesRes, totalCountRes] = await Promise.all([
                 supabase.from("profiles").select("full_name, avatar_url, featured_exercise_ids").eq("id", user.id).single(),
-                supabase.from("workouts").select("id, start_time, title").eq("user_id", user.id).order("start_time", { ascending: false }).limit(1000),
+                supabase.from("workouts").select("id, start_time, end_time, title, sets(weight_kg, reps, exercise_id, duration_s)").eq("user_id", user.id).order("start_time", { ascending: false }).limit(1000),
                 supabase.from("exercises").select("id, name").eq("user_id", user.id),
                 supabase.from("workouts").select("id", { count: 'exact', head: true }).eq("user_id", user.id)
             ]);
@@ -178,10 +353,7 @@ export default function Dashboard() {
                 const targetIdsArray = Array.from(targetExerciseIds);
                 
                 // Fetch workouts with their sets to ensure we get user's data correctly
-                const { data: workoutsWithSets } = await supabase
-                    .from("workouts")
-                    .select("id, start_time, sets(weight_kg, reps, exercise_id)")
-                    .eq("user_id", user.id);
+                const workoutsWithSets = workoutsRes.data;
 
                 let totalVolume = 0;
                 let weeklyTonnage = 0;
@@ -196,6 +368,14 @@ export default function Dashboard() {
                 });
 
                 if (workoutsWithSets) {
+                    setActivityWorkouts(workoutsWithSets.map((workout: any) => ({
+                        start_time: workout.start_time,
+                        volume: (workout.sets || []).reduce((total: number, set: any) =>
+                            total + (Number(set.weight_kg) || 0) * (Number(set.reps) || 0), 0),
+                        durationMinutes: workout.end_time
+                            ? Math.max(0, (new Date(workout.end_time).getTime() - new Date(workout.start_time).getTime()) / 60000)
+                            : 0,
+                    })));
                     workoutsWithSets.forEach(w => {
                         const workoutDate = new Date(w.start_time);
                         const isThisWeek = workoutDate >= startOfWeek;
@@ -410,6 +590,25 @@ export default function Dashboard() {
                         </View>
                     ) : (
                         <>
+                            {activityWorkouts.length > 0 && (
+                                <WorkoutCalendar
+                                    workouts={activityWorkouts}
+                                    colors={colors}
+                                    title={t("app.dashboard.activity.title")}
+                                    lessLabel={t("app.dashboard.activity.less")}
+                                    moreLabel={t("app.dashboard.activity.more")}
+                                    weekdayLabels={[
+                                        t("app.dashboard.activity.monday"),
+                                        t("app.dashboard.activity.wednesday"),
+                                        t("app.dashboard.activity.friday"),
+                                    ]}
+                                    volumeLabel={t("app.dashboard.activity.volume")}
+                                    timeLabel={t("app.dashboard.activity.time")}
+                                    rollingLabel={t("app.dashboard.activity.rolling")}
+                                    yearLabel={t("app.dashboard.activity.year")}
+                                />
+                            )}
+
                             {/* Main Action / Import Card */}
                             {stats.totalWorkouts === 0 ? (
                                 <Pressable style={[styles.importCard, { backgroundColor: scheme === 'dark' ? '#333' : '#000' }]} onPress={() => router.push("/app/import" as any)}>
@@ -587,6 +786,113 @@ const styles = StyleSheet.create({
     maxLiftName: { fontSize: 10, fontWeight: "800", textTransform: "uppercase", marginBottom: 4, fontFamily: "System" },
     maxLiftValue: { fontSize: 20, fontWeight: "900", fontFamily: "System" },
     unit: { fontSize: 14, fontWeight: "600", opacity: 0.6, fontFamily: "System" },
+
+    activitySection: { marginBottom: 32 },
+    activityCard: {
+        borderRadius: 16,
+        borderWidth: 1,
+        padding: 16,
+    },
+    activityGrid: {
+        width: "100%",
+        flexDirection: "row",
+        alignItems: "flex-start",
+        justifyContent: "center",
+    },
+    activityMatrixContent: {
+        flexGrow: 1,
+        alignItems: "center",
+        justifyContent: "center",
+        paddingRight: 4,
+    },
+    activityMatrixScroll: {
+        flex: 1,
+    },
+    activityDayLabels: {
+        position: "relative",
+        width: 28,
+        height: 116,
+        marginRight: 8,
+    },
+    activityMonthSpacer: {
+        height: 16,
+    },
+    activityControls: {
+        flexDirection: "row",
+        alignSelf: "flex-end",
+        gap: 6,
+        marginBottom: 12,
+    },
+    activityToggle: {
+        borderRadius: 6,
+        paddingHorizontal: 10,
+        paddingVertical: 5,
+    },
+    activityToggleText: {
+        fontSize: 11,
+        fontWeight: "700",
+    },
+    activityPeriods: {
+        gap: 6,
+        paddingBottom: 14,
+    },
+    activityPeriod: {
+        borderRadius: 6,
+        paddingHorizontal: 9,
+        paddingVertical: 5,
+    },
+    activityPeriodText: {
+        fontSize: 11,
+        fontWeight: "600",
+    },
+    activityDayLabel: {
+        position: "absolute",
+        left: 0,
+        fontSize: 9,
+        lineHeight: 12,
+    },
+    activityMondayLabel: { top: 16 },
+    activityWednesdayLabel: { top: 50 },
+    activityFridayLabel: { top: 84 },
+    activityWeeks: {
+        flexDirection: "row",
+        gap: 4,
+        alignSelf: "center",
+    },
+    activityWeek: {
+        position: "relative",
+        width: 13,
+        height: 116,
+    },
+    activityCells: {
+        gap: 4,
+        marginTop: 16,
+    },
+    activityMonthLabel: {
+        position: "absolute",
+        left: 0,
+        height: 16,
+        width: 40,
+        fontSize: 10,
+        lineHeight: 14,
+        zIndex: 1,
+    },
+    activityCell: {
+        width: 13,
+        height: 13,
+        borderRadius: 2,
+    },
+    activityLegend: {
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "flex-end",
+        gap: 5,
+        marginTop: 14,
+    },
+    activityLegendText: {
+        fontSize: 9,
+        marginHorizontal: 2,
+    },
 
     importCard: {
         borderRadius: 16,
