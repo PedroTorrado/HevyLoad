@@ -220,6 +220,7 @@
       "full_body_description": "A flexible session for training two to four times per week.",
       "session": "{{split}} session",
       "working_sets": "Suggested working sets · 3 × 8–10",
+      "evidence": "Based on normal working set from {{date}}",
       "add_exercise": "Add an exercise for this muscle group",
       "no_previous_load": "No previous load · start conservatively",
       "import_error": "Import a Hevy export or check your Supabase connection, then try again.",
@@ -229,7 +230,9 @@
     },
     "exercise": {
       "not_found": "Exercise not found",
-      "new_pr": "NEW PR"
+      "new_pr": "NEW PR",
+      "chart_hover_hint": "Hover over the chart for details",
+      "chart_drag_hint": "Touch and drag across the chart for details"
     }
   }
 }

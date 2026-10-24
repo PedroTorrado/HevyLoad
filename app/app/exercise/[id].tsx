@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useState, useMemo } from "react";
+import React, { useCallback, useState, useMemo, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import {
   ActivityIndicator,
@@ -10,7 +10,9 @@ import {
   View,
   Pressable,
   Dimensions,
+  Platform,
 } from "react-native";
+import Svg, { Circle, Defs, LinearGradient, Line, Polygon, Polyline, Stop, Text as SvgText } from "react-native-svg";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "../../../lib/supabase";
 import { useThemeColor } from "../../../lib/theme";
@@ -18,7 +20,7 @@ import { usePreferences } from "../../../lib/preferences";
 import { useFocusEffect } from "expo-router";
 import { format, parseISO } from "date-fns";
 import * as Haptics from "expo-haptics";
-import { LineChart, BarChart } from "react-native-gifted-charts";
+import { BarChart } from "react-native-gifted-charts";
 
 interface Exercise {
   id: string;
@@ -32,6 +34,258 @@ interface Set {
   reps: number;
   start_time: string;
   workout_id: string;
+}
+
+interface ProgressChartPoint {
+  value: number;
+  xLabel: string;
+  is1RMPR: boolean;
+  isWeightPR: boolean;
+  weight: number;
+  reps: number;
+  date: string;
+  workout_id: string;
+  fullDate: string;
+}
+
+interface ProgressChartProps {
+  data: ProgressChartPoint[];
+  maxValue: number;
+  yAxisOffset: number;
+  stepValue: number;
+  colors: ReturnType<typeof useThemeColor>;
+  yAxisType: "weight" | "reps" | "1rm" | "volume";
+  activePoint: ProgressChartPoint | null;
+  onSelect: (point: ProgressChartPoint | null) => void;
+}
+
+interface ChartNativePointerEvent {
+  nativeEvent: {
+    locationX?: number;
+  };
+}
+
+interface ChartInteractionProps {
+  onMouseMove?: (event: ChartNativePointerEvent) => void;
+  onPointerMove?: (event: ChartNativePointerEvent) => void;
+}
+
+const InteractiveView = View as React.ComponentType<
+  React.ComponentProps<typeof View> &
+    ChartInteractionProps &
+    React.RefAttributes<unknown>
+>;
+const InteractiveSvg = Svg as React.ComponentType<
+  React.ComponentProps<typeof Svg> & ChartInteractionProps
+>;
+
+function ProgressChart({
+  data,
+  maxValue,
+  yAxisOffset,
+  stepValue,
+  colors,
+  yAxisType,
+  activePoint,
+  onSelect,
+}: ProgressChartProps) {
+  const width = 360;
+  const height = 210;
+  const [renderedWidth, setRenderedWidth] = React.useState(width);
+  const chartSurfaceRef = React.useRef<HTMLElement | null>(null);
+  const activePointRef = React.useRef(activePoint);
+  activePointRef.current = activePoint;
+  const padding = { left: 42, right: 12, top: 12, bottom: 28 };
+  const plotWidth = width - padding.left - padding.right;
+  const plotHeight = height - padding.top - padding.bottom;
+  const valueToY = (value: number) =>
+    padding.top + (1 - (value - yAxisOffset) / maxValue) * plotHeight;
+  const pointToX = (index: number) =>
+    data.length === 1
+      ? padding.left + plotWidth / 2
+      : padding.left + (index / (data.length - 1)) * plotWidth;
+  const points = data.map((point, index) => ({
+    point,
+    x: pointToX(index),
+    y: valueToY(point.value),
+  }));
+  const linePoints = points.map(({ x, y }) => `${x},${y}`).join(" ");
+  const areaPoints = [
+    `${padding.left},${height - padding.bottom}`,
+    linePoints,
+    `${points[points.length - 1]?.x ?? padding.left},${height - padding.bottom}`,
+  ].join(" ");
+  const tickCount = Math.max(1, Math.round(maxValue / stepValue));
+  const ticks = Array.from({ length: tickCount + 1 }, (_, index) => {
+    const value = yAxisOffset + stepValue * index;
+    return { value, y: valueToY(value) };
+  });
+  const labelCount = Math.min(5, data.length);
+  const labelIndexes = new Set(
+    Array.from({ length: labelCount }, (_, index) =>
+      labelCount === 1
+        ? 0
+        : Math.round((index * (data.length - 1)) / (labelCount - 1)),
+    ),
+  );
+  const selectedIndex = activePoint
+    ? data.findIndex((point) => point.date === activePoint.date && point.value === activePoint.value)
+    : -1;
+  const selected = selectedIndex >= 0 ? points[selectedIndex] : null;
+  const gradientId = `progress-fill-${yAxisType}`;
+
+  const selectClosest = React.useCallback((locationX: number) => {
+    if (!data.length) return;
+    const viewBoxX = locationX * (width / renderedWidth);
+    const clampedX = Math.max(padding.left, Math.min(width - padding.right, viewBoxX));
+    const index = Math.round(((clampedX - padding.left) / plotWidth) * (data.length - 1));
+    const nextPoint = data[Math.max(0, Math.min(data.length - 1, index))];
+    if (
+      activePointRef.current?.date !== nextPoint.date ||
+      activePointRef.current?.value !== nextPoint.value
+    ) {
+      onSelect(nextPoint);
+    }
+  }, [data, onSelect, padding.left, padding.right, plotWidth, renderedWidth]);
+
+  const handlePointerMove = (event: ChartNativePointerEvent) => {
+    const locationX = event.nativeEvent.locationX;
+    if (typeof locationX === "number") selectClosest(locationX);
+  };
+
+  React.useEffect(() => {
+    if (Platform.OS !== "web" || !chartSurfaceRef.current) return;
+    const surface = chartSurfaceRef.current;
+    const handleWebPointerMove = (event: PointerEvent) => {
+      const bounds = surface.getBoundingClientRect();
+      selectClosest(event.clientX - bounds.left);
+    };
+    surface.addEventListener("pointermove", handleWebPointerMove);
+    return () => {
+      surface.removeEventListener("pointermove", handleWebPointerMove);
+    };
+  }, [onSelect, selectClosest]);
+
+  return (
+    <InteractiveView
+      ref={(node: unknown) => {
+        chartSurfaceRef.current = node as unknown as HTMLElement | null;
+      }}
+      style={styles.progressChart}
+      onLayout={(event) => setRenderedWidth(event.nativeEvent.layout.width || width)}
+      onMouseMove={Platform.OS === "web" ? handlePointerMove : undefined}
+      onPointerMove={Platform.OS === "web" ? handlePointerMove : undefined}
+      onStartShouldSetResponder={Platform.OS === "web" ? undefined : () => true}
+      onResponderGrant={Platform.OS === "web" ? undefined : handlePointerMove}
+      onResponderMove={Platform.OS === "web" ? undefined : handlePointerMove}
+    >
+      <InteractiveSvg
+        width="100%"
+        height="100%"
+        viewBox={`0 0 ${width} ${height}`}
+        preserveAspectRatio="none"
+      >
+        <Defs>
+          <LinearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+            <Stop offset="0" stopColor={colors.tint} stopOpacity={0.2} />
+            <Stop offset="1" stopColor={colors.tint} stopOpacity={0} />
+          </LinearGradient>
+        </Defs>
+        {ticks.map((tick) => (
+          <React.Fragment key={tick.value}>
+            <Line
+              x1={padding.left}
+              y1={tick.y}
+              x2={width - padding.right}
+              y2={tick.y}
+              stroke={colors.border}
+              strokeOpacity={0.65}
+              strokeDasharray="3 5"
+            />
+            <SvgText
+              x={padding.left - 8}
+              y={tick.y + 4}
+              fill={colors.secondaryText}
+              fontSize="10"
+              textAnchor="end"
+            >
+              {String(Math.round(tick.value * 10) / 10)}
+            </SvgText>
+          </React.Fragment>
+        ))}
+        {data.length > 1 && (
+          <Polygon points={areaPoints} fill={`url(#${gradientId})`} />
+        )}
+        {data.length > 1 && (
+          <Polyline
+            points={linePoints}
+            fill="none"
+            stroke={colors.tint}
+            strokeWidth={3}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        )}
+        {points.map(({ point, x, y }) => {
+          const isPr = point.is1RMPR || point.isWeightPR;
+          return isPr ? (
+            <Circle
+              key={`${point.date}-${point.value}`}
+              cx={x}
+              cy={y}
+              r={4}
+              fill={point.is1RMPR ? "#FFD700" : "#FF9500"}
+              stroke={colors.card}
+              strokeWidth={2.5}
+            />
+          ) : null;
+        })}
+        {selected && (
+          <>
+            <Line
+              x1={selected.x}
+              y1={padding.top}
+              x2={selected.x}
+              y2={height - padding.bottom}
+              stroke={colors.secondaryText}
+              strokeOpacity={0.7}
+              strokeDasharray="3 4"
+            />
+            <Line
+              x1={padding.left}
+              y1={selected.y}
+              x2={width - padding.right}
+              y2={selected.y}
+              stroke={colors.secondaryText}
+              strokeOpacity={0.5}
+              strokeDasharray="3 4"
+            />
+            <Circle cx={selected.x} cy={selected.y} r={3.5} fill={colors.tint} stroke={colors.card} strokeWidth={1.5} />
+          </>
+        )}
+        {data.map((point, index) =>
+          labelIndexes.has(index) ? (
+            <SvgText
+              key={`label-${point.date}`}
+              x={pointToX(index)}
+              y={height - 7}
+              fill={colors.secondaryText}
+              fontSize="9"
+              textAnchor={
+                index === 0
+                  ? "start"
+                  : index === data.length - 1
+                    ? "end"
+                    : "middle"
+              }
+            >
+              {point.xLabel}
+            </SvgText>
+          ) : null,
+        )}
+      </InteractiveSvg>
+    </InteractiveView>
+  );
 }
 
 export default function ExerciseDetails() {
@@ -306,42 +560,102 @@ export default function ExerciseDetails() {
     colors.tint,
   ]);
 
-  const chartMax = useMemo(() => {
-    const mv = Math.max(...dynamicChartData.map((d) => d.value), 10);
-    return mv * 1.5; // Large buffer for PR tags
-  }, [dynamicChartData]);
+  const chartAxis = useMemo(() => {
+    const values = dynamicChartData.map((item) => item.value);
+    const minValue = Math.min(...values);
+    const maxValue = Math.max(...values, 10);
+    const isRelativeMetric = yAxisType === "1rm" || yAxisType === "weight";
+
+    if (!isRelativeMetric) {
+      const step = yAxisType === "volume"
+        ? Math.max(1, Math.ceil(maxValue / 4 / 10) * 10)
+        : maxValue >= 20 ? 5 : 2;
+      const top = Math.max(step * 4, Math.ceil((maxValue + step) / step) * step);
+      return {
+        offset: 0,
+        max: top,
+        step,
+        sections: Math.round(top / step),
+      };
+    }
+
+    const step = maxValue >= 100 ? 10 : 5;
+    const offset = Math.max(0, Math.floor((minValue - step) / step) * step);
+    const top = Math.ceil((maxValue + step) / step) * step;
+    const range = Math.max(step * 4, top - offset);
+
+    return {
+      offset,
+      max: range,
+      step,
+      sections: Math.round(range / step),
+    };
+  }, [dynamicChartData, yAxisType]);
+
+  useEffect(() => {
+    setActivePointerItem(null);
+  }, [timeSpan, xAxisType, yAxisType, showTopSetsOnly]);
+
+  const visibleChartData = useMemo(() => {
+    const maxPoints = 96;
+    if (dynamicChartData.length <= maxPoints) return dynamicChartData;
+
+    if (xAxisType === "date") {
+      const bucketDays = Math.ceil(dynamicChartData.length / maxPoints);
+      const buckets = new Map<string, (typeof dynamicChartData)[number]>();
+
+      dynamicChartData.forEach((item) => {
+        const date = new Date(item.date);
+        const bucketStart = new Date(date);
+        bucketStart.setDate(date.getDate() - (date.getDate() % bucketDays));
+        const key = bucketStart.toISOString().slice(0, 10);
+        const current = buckets.get(key);
+        if (!current || item.value > current.value || item.is1RMPR || item.isWeightPR) {
+          buckets.set(key, item);
+        }
+      });
+
+      return Array.from(buckets.values()).sort(
+        (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
+      );
+    }
+
+    const interval = Math.ceil(dynamicChartData.length / maxPoints);
+    return dynamicChartData.filter((_, index) => index % interval === 0);
+  }, [dynamicChartData, xAxisType]);
 
   const chartProps = useMemo(() => {
     const sw = Dimensions.get("window").width;
-    // ScrollView(16*2) + chartWrapper(16*2) = 64
-    const horizontalPadding = 64;
-    const yAxisWidth = 50;
-    const rightPadding = 15;
-    const avail = sw - horizontalPadding - yAxisWidth - rightPadding;
+    const chartWidth = Math.max(280, sw - 112);
+    const yAxisWidth = 42;
+    const avail = chartWidth - yAxisWidth;
 
-    // initialSpacing: 0 is mandatory for perfect touch-to-data mapping
     const spacing =
-      dynamicChartData.length > 1 ? avail / (dynamicChartData.length - 1) : 0;
+      visibleChartData.length > 1
+        ? avail / (visibleChartData.length - 1)
+        : 0;
 
     return {
-      data: dynamicChartData,
+      data: visibleChartData,
       width: avail,
-      height: 220,
-      maxValue: chartMax,
-      noOfSections: 5,
+      height: 230,
+      maxValue: chartAxis.max,
+      yAxisOffset: chartAxis.offset,
+      stepValue: chartAxis.step,
+      noOfSections: chartAxis.sections,
       spacing: spacing,
       initialSpacing: 0,
-      endSpacing: 0,
+      endSpacing: 4,
       color: colors.tint,
-      thickness: 3,
+      thickness: 2.5,
       startFillColor: colors.tint,
       endFillColor: colors.tint,
-      startOpacity: 0.2,
-      endOpacity: 0.02,
+      startOpacity: 0.12,
+      endOpacity: 0,
       yAxisThickness: 0,
       xAxisThickness: 1,
       xAxisColor: colors.border,
-      yAxisLabelWidth: 50,
+      yAxisLabelWidth: yAxisWidth,
       yAxisTextStyle: {
         color: colors.secondaryText,
         fontSize: 10,
@@ -349,13 +663,13 @@ export default function ExerciseDetails() {
       },
       xAxisLabelTextStyle: {
         color: colors.secondaryText,
-        fontSize: 9,
-        width: 80,
+        fontSize: 8,
+        width: 58,
         textAlign: "center" as const,
       },
       rotateLabel: true,
-      labelRotation: -45,
-      labelsExtraHeight: 50,
+      labelRotation: -35,
+      labelsExtraHeight: 38,
       hideDataPoints: false,
       renderDataPoint: (item: any) => {
         if (item.is1RMPR || item.isWeightPR) {
@@ -433,7 +747,7 @@ export default function ExerciseDetails() {
         },
       },
     };
-  }, [dynamicChartData, chartMax, colors, yAxisType]);
+  }, [visibleChartData, chartAxis, colors, yAxisType]);
 
   const handleBack = () =>
     router.canGoBack() ? router.back() : router.replace("/app/dashboard");
@@ -526,7 +840,9 @@ export default function ExerciseDetails() {
             <Text style={[styles.activeDate, { color: colors.secondaryText }]}>
               {activePointerItem
                 ? activePointerItem.fullDate
-                : "Tap chart for details"}
+                : Platform.OS === "web"
+                  ? t("app.exercise.chart_hover_hint")
+                  : t("app.exercise.chart_drag_hint")}
             </Text>
             <View
               style={{
@@ -541,6 +857,16 @@ export default function ExerciseDetails() {
                   ? `${activePointerItem.value}${yAxisType === "reps" ? "r" : "kg"}`
                   : "-"}
               </Text>
+              {activePointerItem && (
+                <Text
+                  style={[
+                    styles.activeSetDetail,
+                    { color: colors.secondaryText },
+                  ]}
+                >
+                  {activePointerItem.weight}kg × {activePointerItem.reps}
+                </Text>
+              )}
               {(activePointerItem?.is1RMPR ||
                 activePointerItem?.isWeightPR) && (
                 <View style={styles.prBadge}>
@@ -732,7 +1058,16 @@ export default function ExerciseDetails() {
 
         <View style={{ marginTop: 20, zIndex: 10, overflow: "visible" }}>
           {chartType === "line" ? (
-            <LineChart {...chartProps} areaChart />
+            <ProgressChart
+              data={visibleChartData}
+              maxValue={chartAxis.max}
+              yAxisOffset={chartAxis.offset}
+              stepValue={chartAxis.step}
+              colors={colors}
+              yAxisType={yAxisType}
+              activePoint={activePointerItem}
+              onSelect={setActivePointerItem}
+            />
           ) : (
             <BarChart
               {...chartProps}
@@ -1003,10 +1338,27 @@ const styles = StyleSheet.create({
   headerInfo: { flex: 1, alignItems: "center" },
   headerTitle: { fontSize: 16, fontWeight: "800", fontFamily: "System" },
   headerSubtitle: { fontSize: 12, fontWeight: "600", fontFamily: "System" },
-  content: { padding: 16 },
+  content: {
+    padding: 16,
+    width: "100%",
+    maxWidth: 920,
+    alignSelf: "center",
+  },
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
-  statsGrid: { flexDirection: "row", gap: 12, marginBottom: 12 },
-  statBox: { flex: 1, padding: 16, borderRadius: 12, borderWidth: 1 },
+  statsGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 12,
+    marginBottom: 12,
+  },
+  statBox: {
+    flex: 1,
+    flexBasis: "40%",
+    minWidth: 140,
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
   statLabel: {
     fontSize: 11,
     fontWeight: "700",
@@ -1019,9 +1371,20 @@ const styles = StyleSheet.create({
     marginTop: 12,
     marginBottom: 24,
     padding: 16,
+    width: "100%",
+    maxWidth: 880,
+    alignSelf: "center",
     borderRadius: 16,
     borderWidth: 1,
     overflow: "visible",
+  },
+  progressChart: {
+    width: "100%",
+    aspectRatio: 360 / 210,
+    maxWidth: "100%",
+    alignSelf: "stretch",
+    flexShrink: 1,
+    position: "relative",
   },
   chartHeaderLegacy: {
     flexDirection: "row",
@@ -1039,6 +1402,7 @@ const styles = StyleSheet.create({
   },
   activeDate: { fontSize: 11, fontWeight: "700", fontFamily: "System" },
   activeValueBig: { fontSize: 28, fontWeight: "900", fontFamily: "System" },
+  activeSetDetail: { fontSize: 11, fontWeight: "700", marginLeft: 2 },
   miniViewWorkout: {
     flexDirection: "row",
     alignItems: "center",
@@ -1104,10 +1468,7 @@ const styles = StyleSheet.create({
     paddingVertical: 1,
     borderRadius: 4,
     elevation: 5,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.5,
-    shadowRadius: 2,
+    boxShadow: "0px 2px 2px rgba(0, 0, 0, 0.5)",
   },
   markerText: { color: "#000", fontSize: 7, fontWeight: "900" },
   normalDot: {
@@ -1124,10 +1485,7 @@ const styles = StyleSheet.create({
     padding: 10,
     borderRadius: 10,
     borderWidth: 1,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
+    boxShadow: "0px 4px 4px rgba(0, 0, 0, 0.3)",
     elevation: 8,
   },
   pointerDate: {

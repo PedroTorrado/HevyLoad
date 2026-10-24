@@ -14,6 +14,14 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "../../lib/supabase";
 import { useThemeColor } from "../../lib/theme";
 import { TRAINING_PROGRAM, TrainingExerciseTarget } from "../../lib/training-program";
+import {
+    createEvidenceWindow,
+    ExerciseEvidence,
+    getBestRecentEvidence,
+    matchesTrainingTarget,
+    suggestedLoadFromEvidence,
+    TrainingPerformance,
+} from "../../lib/training-recommendations";
 
 interface Exercise {
     id: string;
@@ -21,25 +29,8 @@ interface Exercise {
     muscle_group: string | null;
 }
 
-interface Performance {
-    weight_kg: number;
-    reps: number;
-    exercise_id: string;
-    start_time: string;
-}
-
-interface RawPerformance extends Omit<Performance, "start_time"> {
+interface RawPerformance extends Omit<TrainingPerformance, "start_time"> {
     workouts: { start_time: string } | { start_time: string }[];
-}
-
-function matchesTarget(exercise: Exercise, target: TrainingExerciseTarget) {
-    const value = `${exercise.name} ${exercise.muscle_group ?? ""}`.toLowerCase();
-    return target.aliases.some((keyword) => value.includes(keyword));
-}
-
-function estimateOneRepMax(weight: number, reps: number) {
-    if (weight <= 0 || reps <= 0) return 0;
-    return reps === 1 ? weight : weight / (1.0278 - 0.0278 * reps);
 }
 
 export default function Suggestions() {
@@ -49,7 +40,7 @@ export default function Suggestions() {
     const colors = useThemeColor();
     const [sessionIndex, setSessionIndex] = useState(0);
     const [exercises, setExercises] = useState<Exercise[]>([]);
-    const [performances, setPerformances] = useState<Performance[]>([]);
+    const [performances, setPerformances] = useState<TrainingPerformance[]>([]);
     const [bodyweight, setBodyweight] = useState<number | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -69,9 +60,9 @@ export default function Suggestions() {
                 supabase.from("exercises").select("id, name, muscle_group").eq("user_id", user.id),
                 supabase
                     .from("sets")
-                    .select("weight_kg, reps, exercise_id, workouts!inner(user_id, start_time)")
+                    .select("weight_kg, reps, exercise_id, set_type, rpe, workouts!inner(user_id, start_time)")
                     .eq("workouts.user_id", user.id)
-                    .limit(1000),
+                    .range(0, 4999),
                 supabase.from("profiles").select("bodyweight").eq("id", user.id).single(),
             ]);
 
@@ -84,6 +75,8 @@ export default function Suggestions() {
                     weight_kg: Number(performance.weight_kg),
                     reps: Number(performance.reps),
                     exercise_id: performance.exercise_id,
+                    set_type: performance.set_type,
+                    rpe: performance.rpe,
                     start_time: Array.isArray(performance.workouts)
                         ? performance.workouts[0]?.start_time
                         : performance.workouts?.start_time,
@@ -100,37 +93,26 @@ export default function Suggestions() {
 
     const selectedSession = TRAINING_PROGRAM[sessionIndex % TRAINING_PROGRAM.length];
     const suggestions = useMemo(() => {
-        const performanceByExercise = new Map<string, Performance>();
-        performances
-            .filter((performance) => Number(performance.weight_kg) > 0 && Number(performance.reps) > 0)
-            .sort((a, b) => new Date(b.start_time).getTime() - new Date(a.start_time).getTime())
-            .forEach((performance) => {
-                const current = performanceByExercise.get(performance.exercise_id);
-                const performanceScore = estimateOneRepMax(Number(performance.weight_kg), Number(performance.reps));
-                const currentScore = current ? estimateOneRepMax(Number(current.weight_kg), Number(current.reps)) : 0;
-                if (!current || performanceScore > currentScore) {
-                    performanceByExercise.set(performance.exercise_id, performance);
-                }
-            });
-
+        const evidenceWindow = createEvidenceWindow();
         const usedExerciseIds = new Set<string>();
         return selectedSession.exercises.map((target) => {
-            const candidates = exercises.filter((exercise) => !usedExerciseIds.has(exercise.id) && matchesTarget(exercise, target));
+            const candidates = exercises.filter((exercise) => !usedExerciseIds.has(exercise.id) && matchesTrainingTarget(exercise.name, exercise.muscle_group, target));
             const rankedCandidates = [...candidates].sort((a, b) => {
-                const aPerformance = performanceByExercise.get(a.id);
-                const bPerformance = performanceByExercise.get(b.id);
-                if (aPerformance && bPerformance) {
-                    return new Date(bPerformance.start_time).getTime() - new Date(aPerformance.start_time).getTime();
-                }
-                return Number(Boolean(bPerformance)) - Number(Boolean(aPerformance));
+                const aEvidence = getBestRecentEvidence(performances, a.id, evidenceWindow);
+                const bEvidence = getBestRecentEvidence(performances, b.id, evidenceWindow);
+                return (bEvidence?.recencyScore ?? 0) - (aEvidence?.recencyScore ?? 0);
             });
             const exercise = rankedCandidates[0];
             if (exercise) usedExerciseIds.add(exercise.id);
-            const performance = exercise ? performanceByExercise.get(exercise.id) : undefined;
-            const oneRepMax = performance ? estimateOneRepMax(Number(performance.weight_kg), Number(performance.reps)) : 0;
-            const load = oneRepMax ? Math.max(0, Math.round((oneRepMax * 0.70) / 2.5) * 2.5) : null;
-            return { target, exercise, load };
-        }).filter((suggestion): suggestion is { target: TrainingExerciseTarget; exercise: Exercise; load: number | null } => Boolean(suggestion.exercise));
+            const evidence = exercise ? getBestRecentEvidence(performances, exercise.id, evidenceWindow) : null;
+            const load = suggestedLoadFromEvidence(evidence);
+            return { target, exercise, load, evidence };
+        }).filter((suggestion): suggestion is {
+            target: TrainingExerciseTarget;
+            exercise: Exercise;
+            load: number | null;
+            evidence: ExerciseEvidence | null;
+        } => Boolean(suggestion.exercise));
     }, [exercises, performances, selectedSession]);
 
     return (
@@ -197,6 +179,13 @@ export default function Suggestions() {
                             <Text style={[styles.loadText, { color: colors.secondaryText }]}>
                                 {suggestion.load ? `${suggestion.load} kg · ${suggestion.target.sets} × ${suggestion.target.reps}` : t("app.suggestions.no_previous_load")}
                             </Text>
+                            {suggestion.evidence ? (
+                                <Text style={[styles.evidenceText, { color: colors.secondaryText }]}>
+                                    {t("app.suggestions.evidence", {
+                                        date: new Date(suggestion.evidence.performance.start_time).toLocaleDateString(),
+                                    })}
+                                </Text>
+                            ) : null}
                         </View>
                         <Ionicons name="sparkles-outline" size={20} color={colors.tint} />
                     </View>
@@ -241,6 +230,7 @@ const styles = StyleSheet.create({
     groupName: { fontSize: 10, fontWeight: "800", letterSpacing: 1.2, marginBottom: 4 },
     exerciseName: { fontSize: 17, fontWeight: "800" },
     loadText: { fontSize: 13, marginTop: 5 },
+    evidenceText: { fontSize: 11, marginTop: 3 },
     emptyCard: { padding: 22, borderRadius: 14, borderWidth: 1, marginTop: 18 },
     emptyTitle: { fontSize: 17, fontWeight: "800", marginBottom: 6 },
     emptyText: { fontSize: 14, lineHeight: 21 },

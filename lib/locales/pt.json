@@ -220,6 +220,7 @@
       "full_body_description": "Uma sessão flexível para treinar duas a quatro vezes por semana.",
       "session": "Sessão de {{split}}",
       "working_sets": "Séries de trabalho sugeridas · 3 × 8–10",
+      "evidence": "Baseado numa série de trabalho normal de {{date}}",
       "add_exercise": "Adicione um exercício para este grupo muscular",
       "no_previous_load": "Sem carga anterior · comece com prudência",
       "import_error": "Importe um ficheiro do Hevy ou verifique a ligação ao Supabase e tente novamente.",
@@ -229,7 +230,9 @@
     },
     "exercise": {
       "not_found": "Exercício não encontrado",
-      "new_pr": "NOVO PR"
+      "new_pr": "NOVO PR",
+      "chart_hover_hint": "Passe o cursor sobre o gráfico para ver detalhes",
+      "chart_drag_hint": "Toque e arraste no gráfico para ver detalhes"
     }
   }
 }
