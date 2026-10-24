@@ -1,6 +1,7 @@
 import { useRouter } from "expo-router";
 import { useState } from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import * as Linking from "expo-linking";
 import { useTranslation } from "react-i18next";
 import { supabase } from "../../lib/supabase";
 import { isValidEmail } from "../../lib/validation";
@@ -21,8 +22,11 @@ export default function ForgotPassword() {
         }
         setLoading(true);
 
+        const redirectTo = Platform.OS === "web"
+            ? `${window.location.origin}/auth/reset-password`
+            : Linking.createURL("auth/reset-password");
         const { error } = await supabase.auth.resetPasswordForEmail(email, {
-            redirectTo: "hevyload://reset-password",
+            redirectTo,
         });
 
         setLoading(false);
@@ -31,7 +35,8 @@ export default function ForgotPassword() {
     }
 
     return (
-        <View style={styles.container}>
+        <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === "ios" ? "padding" : "height"}>
+            <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
             <View style={styles.pageFrame}>
                 <View style={styles.centered}>
                     <Text style={styles.title}>{t("auth.forgot_password.title", "Reset Password")}</Text>
@@ -73,12 +78,14 @@ export default function ForgotPassword() {
                     </Pressable>
                 </View>
             </View>
-        </View>
+            </ScrollView>
+            </KeyboardAvoidingView>
     );
 }
 
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: "#FFFFFF", paddingHorizontal: 32 },
+    container: { flex: 1, backgroundColor: "#FFFFFF" },
+    scrollContent: { flexGrow: 1, justifyContent: "center", paddingHorizontal: 24, paddingVertical: 32 },
     pageFrame: { width: "100%", maxWidth: 520, flex: 1, alignSelf: "center" },
     centered: { flex: 1, justifyContent: "center" },
     title: { fontSize: 32, fontWeight: "700", color: "#000", marginBottom: 8, textAlign: "center" },

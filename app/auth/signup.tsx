@@ -293,7 +293,7 @@ const styles = StyleSheet.create({
         marginBottom: 20,
     },
     buttonText: { color: "#fff", fontSize: 16, fontWeight: "600" },
-    footerRow: { flexDirection: "row", justifyContent: "center" },
-    footerText: { fontSize: 14, color: "#666" },
+    footerRow: { flexDirection: "row", flexWrap: "wrap", justifyContent: "center", alignItems: "center", paddingHorizontal: 8 },
+    footerText: { fontSize: 14, color: "#666", textAlign: "center" },
     footerActionText: { fontSize: 14, color: "#000", fontWeight: "700" },
 });

@@ -7,9 +7,10 @@ const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 
 // Use a valid URL format for the placeholder to prevent the library from crashing the app process
-const validUrl = supabaseUrl && supabaseUrl.startsWith("http") 
-  ? supabaseUrl 
-  : "https://placeholder-please-set-your-url.supabase.co";
+const validUrl =
+  supabaseUrl && supabaseUrl.startsWith("http")
+    ? supabaseUrl
+    : "https://placeholder-please-set-your-url.supabase.co";
 
 const validKey = supabaseAnonKey || "placeholder-key";
 
@@ -19,5 +20,10 @@ export const supabase = createClient(validUrl, validKey, {
     autoRefreshToken: true,
     persistSession: true,
     detectSessionInUrl: Platform.OS === "web",
+    // Bypass navigator.locks on Web to prevent "The lock request is aborted" crashes
+    lock:
+      Platform.OS === "web"
+        ? async (_name, _acquireTimeout, fn) => await fn()
+        : undefined,
   },
 });

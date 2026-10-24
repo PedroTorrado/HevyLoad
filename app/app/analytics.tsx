@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter, useFocusEffect } from "expo-router";
-import { useCallback, useState, useRef, useEffect, useMemo } from "react";
+import { useCallback, useState, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { 
     ActivityIndicator, 
@@ -9,14 +9,12 @@ import {
     Text, 
     View, 
     Pressable,
-    Dimensions,
-    Platform
+    useWindowDimensions
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "../../lib/supabase";
 import { useThemeColor } from "../../lib/theme";
-import { format, subMonths, eachMonthOfInterval, startOfMonth, endOfMonth, parseISO } from "date-fns";
-import Svg, { Rect, G, Text as SvgText } from "react-native-svg";
+import { format, eachMonthOfInterval, parseISO } from "date-fns";
 import { BarChart, LineChart } from "react-native-gifted-charts";
 
 export default function Analytics() {
@@ -24,9 +22,9 @@ export default function Analytics() {
     const { t } = useTranslation();
     const insets = useSafeAreaInsets();
     const colors = useThemeColor();
+    const { width: windowWidth } = useWindowDimensions();
 
     const [loading, setLoading] = useState(false);
-    const hasLoaded = useRef(false);
     const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
     const [monthlyStats, setMonthlyStats] = useState<any[]>([]);
     const [muscleDist, setMuscleDist] = useState<any[]>([]);
@@ -49,19 +47,17 @@ export default function Analytics() {
 
     useFocusEffect(
         useCallback(() => {
-            loadAnalytics(false);
+            loadAnalytics(true);
         }, [selectedYear])
     );
 
-    useEffect(() => {
-        loadAnalytics(true);
-        hasLoaded.current = true;
-    }, [selectedYear]);
-
     async function loadAnalytics(showLoader: boolean) {
-        if (showLoader && monthlyStats.length === 0) setLoading(true);
+        if (showLoader) setLoading(true);
         const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return;
+        if (!user) {
+            setLoading(false);
+            return;
+        }
 
         const startOfYearDate = new Date(selectedYear, 0, 1);
         const endOfYearDate = new Date(selectedYear, 11, 31, 23, 59, 59);
@@ -73,54 +69,59 @@ export default function Analytics() {
             supabase.from("profiles").select("bodyweight, gender").eq("id", user.id).single()
         ]);
 
-        // Fetch all workouts with sets for the year (paginated)
-        let workoutsWithSets: any[] = [];
-        let wRangeStart = 0;
-        const wRangeStep = 1000;
-        let wHasMore = true;
-
-        while (wHasMore) {
-            const { data, error } = await supabase
-                .from("workouts")
-                .select("id, start_time, sets(id, weight_kg, reps, exercise_id, exercises(id, name, muscle_group))")
-                .eq("user_id", user.id)
-                .gte("start_time", startOfSelection)
-                .lte("start_time", endOfSelection)
-                .range(wRangeStart, wRangeStart + wRangeStep - 1);
-
-            if (error) break;
-            if (data && data.length > 0) {
-                workoutsWithSets = [...workoutsWithSets, ...data];
-                if (data.length < wRangeStep) wHasMore = false;
-                else wRangeStart += wRangeStep;
-            } else {
-                wHasMore = false;
-            }
+        if (workoutsRes.error) {
+            console.error("Error loading analytics workouts:", workoutsRes.error);
+        }
+        if (profileRes.error && profileRes.error.code !== "PGRST116") {
+            console.error("Error loading analytics profile:", profileRes.error);
         }
 
-        // Fetch all-time sets for SBD PRs (paginated)
-        let sbdData: any[] = [];
-        let sRangeStart = 0;
-        const sRangeStep = 1000;
-        let sHasMore = true;
+        // These two datasets are independent. Fetching them concurrently avoids
+        // making users wait for the full workout history before SBD data starts.
+        const [workoutsWithSets, sbdData] = await Promise.all([
+            (async () => {
+                const result: any[] = [];
+                const pageSize = 1000;
+                for (let rangeStart = 0; ; rangeStart += pageSize) {
+                    const { data, error } = await supabase
+                        .from("workouts")
+                        .select("id, start_time, sets(id, weight_kg, reps, exercise_id, exercises(id, name, muscle_group))")
+                        .eq("user_id", user.id)
+                        .gte("start_time", startOfSelection)
+                        .lte("start_time", endOfSelection)
+                        .order("start_time", { ascending: true })
+                        .range(rangeStart, rangeStart + pageSize - 1);
 
-        while (sHasMore) {
-            const { data, error } = await supabase
-                .from("sets")
-                .select("weight_kg, reps, exercise:exercises(name), workouts!inner(user_id, start_time)")
-                .eq("workouts.user_id", user.id)
-                .lte("workouts.start_time", endOfSelection)
-                .range(sRangeStart, sRangeStart + sRangeStep - 1);
+                    if (error) {
+                        console.error("Error loading analytics sets:", error);
+                        break;
+                    }
+                    result.push(...(data ?? []));
+                    if (!data || data.length < pageSize) break;
+                }
+                return result;
+            })(),
+            (async () => {
+                const result: any[] = [];
+                const pageSize = 1000;
+                for (let rangeStart = 0; ; rangeStart += pageSize) {
+                    const { data, error } = await supabase
+                        .from("sets")
+                        .select("weight_kg, reps, exercise:exercises(name), workouts!inner(user_id, start_time)")
+                        .eq("workouts.user_id", user.id)
+                        .lte("workouts.start_time", endOfSelection)
+                        .range(rangeStart, rangeStart + pageSize - 1);
 
-            if (error) break;
-            if (data && data.length > 0) {
-                sbdData = [...sbdData, ...data];
-                if (data.length < sRangeStep) sHasMore = false;
-                else sRangeStart += sRangeStep;
-            } else {
-                sHasMore = false;
-            }
-        }
+                    if (error) {
+                        console.error("Error loading analytics SBD data:", error);
+                        break;
+                    }
+                    result.push(...(data ?? []));
+                    if (!data || data.length < pageSize) break;
+                }
+                return result;
+            })(),
+        ]);
 
         const months = eachMonthOfInterval({ start: startOfYearDate, end: endOfYearDate });
 
@@ -260,37 +261,53 @@ export default function Analytics() {
 
     const handleBack = () => router.canGoBack() ? router.back() : router.replace("/app/dashboard");
 
+    // Gifted charts position the final x-axis label beyond the nominal chart
+    // width. Leave room for the y-axis and the final label so it stays inside
+    // the card on narrow screens.
+    const chartWidth = Math.max(260, Math.min(windowWidth - 132, 1040));
+    const chartSpacing = Math.max(24, (chartWidth - 60) / 11);
+    const compactChartData = (data: any[]) => data.map((item) => ({
+        ...item,
+        label: String(item.label).slice(0, 2),
+    }));
+    const renderMonthLabels = () => (
+        <View style={styles.monthLabels}>
+            {monthlyStats.map((month) => (
+                <Text key={month.label} style={[styles.monthLabel, { color: colors.secondaryText }]}>
+                    {String(month.label).slice(0, 2)}
+                </Text>
+            ))}
+        </View>
+    );
+
     const renderFrequencyChart = () => {
         if (monthlyStats.length === 0) return null;
-        const sw = Dimensions.get("window").width;
-        const chartAreaWidth = sw - 85; 
         const maxValue = Math.max(...monthlyStats.map(s => s.value), 1);
 
         return (
             <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                <Text style={[styles.cardTitle, { color: colors.secondaryText }]}>Workout Frequency</Text>
-                <View style={{ marginTop: 25, paddingLeft: 10 }}>
+                <Text style={[styles.cardTitle, { color: colors.secondaryText }]}>{t("app.analytics.workout_frequency")}</Text>
+                <View style={styles.chartViewport}>
                     <BarChart
-                        data={monthlyStats}
-                        height={130}
-                        width={chartAreaWidth}
-                        maxValue={maxValue * 1.6}
-                        barWidth={16}
-                        initialSpacing={15}
-                        spacing={(chartAreaWidth - 30 - (16 * 12)) / 11}
-                        barBorderRadius={3}
-                        frontColor={colors.tint}
-                        noOfSections={3}
-                        yAxisThickness={0}
-                        xAxisThickness={0}
-                        yAxisLabelWidth={30}
-                        yAxisTextStyle={{ color: colors.secondaryText, fontSize: 8, fontFamily: 'System' }}
-                        xAxisLabelTextStyle={{ color: colors.secondaryText, fontSize: 8, fontFamily: 'System' }}
-                        showValuesAsTopLabel
-                        topLabelTextStyle={{ color: colors.text, fontSize: 8, fontWeight: '800', fontFamily: 'System' }}
-                        disableScroll
-                        endSpacing={0}
+                            data={compactChartData(monthlyStats)}
+                            height={130}
+                            width={chartWidth}
+                            maxValue={maxValue * 1.6}
+                            barWidth={16}
+                            initialSpacing={30}
+                            spacing={chartSpacing}
+                            barBorderRadius={3}
+                            frontColor={colors.tint}
+                            noOfSections={3}
+                            yAxisThickness={0}
+                            xAxisThickness={0}
+                            yAxisLabelWidth={30}
+                            yAxisTextStyle={{ color: colors.secondaryText, fontSize: 8, fontFamily: 'System' }}
+                            xAxisLabelTextStyle={{ color: "transparent", fontSize: 0, fontFamily: 'System' }}
+                            disableScroll
+                            endSpacing={16}
                     />
+                    {renderMonthLabels()}
                 </View>
             </View>
         );
@@ -298,40 +315,37 @@ export default function Analytics() {
 
     const renderVolumeTrend = () => {
         if (volumeTrend.length === 0) return null;
-        const sw = Dimensions.get("window").width;
-        const chartAreaWidth = sw - 85;
         const maxValue = Math.max(...volumeTrend.map(v => v.value), 10);
 
         return (
             <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                <Text style={[styles.cardTitle, { color: colors.secondaryText }]}>Volume Trend (1000s kg)</Text>
-                <View style={{ marginTop: 25, paddingLeft: 10 }}>
+                <Text style={[styles.cardTitle, { color: colors.secondaryText }]}>{t("app.analytics.volume_trend")}</Text>
+                <View style={styles.chartViewport}>
                     <LineChart
-                        data={volumeTrend}
-                        height={130}
-                        width={chartAreaWidth}
-                        maxValue={maxValue * 1.6}
-                        initialSpacing={15}
-                        spacing={(chartAreaWidth - 30) / 11}
-                        color={colors.tint}
-                        thickness={3}
-                        startFillColor={colors.tint}
-                        startOpacity={0.2}
-                        endOpacity={0.01}
-                        areaChart
-                        noOfSections={3}
-                        yAxisThickness={0}
-                        xAxisThickness={0}
-                        yAxisLabelWidth={30}
-                        yAxisTextStyle={{ color: colors.secondaryText, fontSize: 8, fontFamily: 'System' }}
-                        xAxisLabelTextStyle={{ color: colors.secondaryText, fontSize: 8, fontFamily: 'System' }}
-                        hideDataPoints={false}
-                        dataPointsRadius={4}
-                        showValuesAsTopLabel
-                        topLabelTextStyle={{ color: colors.text, fontSize: 8, fontWeight: '800', fontFamily: 'System' }}
-                        disableScroll
-                        endSpacing={0}
+                            data={compactChartData(volumeTrend)}
+                            height={130}
+                            width={chartWidth}
+                            maxValue={maxValue * 1.6}
+                            initialSpacing={30}
+                            spacing={chartSpacing}
+                            color={colors.tint}
+                            thickness={3}
+                            startFillColor={colors.tint}
+                            startOpacity={0.2}
+                            endOpacity={0.01}
+                            areaChart
+                            noOfSections={3}
+                            yAxisThickness={0}
+                            xAxisThickness={0}
+                            yAxisLabelWidth={30}
+                            yAxisTextStyle={{ color: colors.secondaryText, fontSize: 8, fontFamily: 'System' }}
+                            xAxisLabelTextStyle={{ color: "transparent", fontSize: 0, fontFamily: 'System' }}
+                            hideDataPoints={false}
+                            dataPointsRadius={4}
+                            disableScroll
+                            endSpacing={16}
                     />
+                    {renderMonthLabels()}
                 </View>
             </View>
         );
@@ -339,35 +353,33 @@ export default function Analytics() {
 
     const renderStrengthTrend = () => {
         if (strengthTrend.length === 0) return null;
-        const sw = Dimensions.get("window").width;
-        const chartAreaWidth = sw - 85;
         const maxValue = Math.max(...strengthTrend.map(v => v.value), 10);
 
         return (
             <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                <Text style={[styles.cardTitle, { color: colors.secondaryText }]}>Strength Trend (Monthly Powerlifting Total)</Text>
-                <View style={{ marginTop: 25, paddingLeft: 10 }}>
+                <Text style={[styles.cardTitle, { color: colors.secondaryText }]}>{t("app.analytics.strength_trend")}</Text>
+                <View style={styles.chartViewport}>
                     <BarChart
-                        data={strengthTrend}
-                        height={130}
-                        width={chartAreaWidth}
-                        maxValue={maxValue * 1.6}
-                        barWidth={16}
-                        initialSpacing={15}
-                        spacing={(chartAreaWidth - 30 - (16 * 12)) / 11}
-                        barBorderRadius={3}
-                        frontColor={colors.tint}
-                        noOfSections={3}
-                        yAxisThickness={0}
-                        xAxisThickness={0}
-                        yAxisLabelWidth={30}
-                        yAxisTextStyle={{ color: colors.secondaryText, fontSize: 8, fontFamily: 'System' }}
-                        xAxisLabelTextStyle={{ color: colors.secondaryText, fontSize: 8, fontFamily: 'System' }}
-                        showValuesAsTopLabel
-                        topLabelTextStyle={{ color: colors.text, fontSize: 8, fontWeight: '800', fontFamily: 'System' }}
-                        disableScroll
-                        endSpacing={0}
+                            data={compactChartData(strengthTrend)}
+                            height={130}
+                            width={chartWidth}
+                            maxValue={maxValue * 1.6}
+                            barWidth={16}
+                            initialSpacing={30}
+                            spacing={chartSpacing}
+                            barBorderRadius={3}
+                            frontColor={colors.tint}
+                            noOfSections={3}
+                            yAxisThickness={0}
+                            xAxisThickness={0}
+                            yAxisLabelWidth={30}
+                            yAxisTextStyle={{ color: colors.secondaryText, fontSize: 8, fontFamily: 'System' }}
+                            xAxisLabelTextStyle={{ color: "transparent", fontSize: 0, fontFamily: 'System' }}
+                            topLabelTextStyle={{ color: colors.text, fontSize: 8, fontWeight: '800', fontFamily: 'System' }}
+                            disableScroll
+                            endSpacing={16}
                     />
+                    {renderMonthLabels()}
                 </View>
             </View>
         );
@@ -375,46 +387,44 @@ export default function Analytics() {
 
     const renderPRHistory = () => {
         if (prHistory.length === 0) return null;
-        const sw = Dimensions.get("window").width;
-        const chartAreaWidth = sw - 85;
         const maxValue = Math.max(...prHistory.map(v => v.value), 10);
 
         return (
             <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
                 <View style={styles.cardHeaderWithAction}>
-                    <Text style={[styles.cardTitle, { color: colors.secondaryText }]}>Milestones (New PRs)</Text>
+                    <Text style={[styles.cardTitle, { color: colors.secondaryText }]}>{t("app.analytics.milestones")}</Text>
                     <Pressable onPress={() => router.push("/app/milestones")}>
-                        <Text style={[styles.viewAllBtn, { color: colors.tint }]}>VIEW ALL</Text>
+                        <Text style={[styles.viewAllBtn, { color: colors.tint }]}>{t("app.analytics.view_all")}</Text>
                     </Pressable>
                 </View>
-                <View style={{ marginTop: 25, paddingLeft: 10 }}>
+                <View style={styles.chartViewport}>
                     <BarChart
-                        data={prHistory}
-                        height={130}
-                        width={chartAreaWidth}
-                        maxValue={maxValue * 1.6}
-                        barWidth={16}
-                        initialSpacing={15}
-                        spacing={(chartAreaWidth - 30 - (16 * 12)) / 11}
-                        barBorderRadius={3}
-                        frontColor={colors.tint}
-                        noOfSections={3}
-                        yAxisThickness={0}
-                        xAxisThickness={0}
-                        yAxisLabelWidth={30}
-                        yAxisTextStyle={{ color: colors.secondaryText, fontSize: 8, fontFamily: 'System' }}
-                        xAxisLabelTextStyle={{ color: colors.secondaryText, fontSize: 8, fontFamily: 'System' }}
-                        showValuesAsTopLabel
-                        topLabelTextStyle={{ color: colors.text, fontSize: 8, fontWeight: '800', fontFamily: 'System' }}
-                        disableScroll
-                        endSpacing={0}
-                        onPress={(item: any) => {
-                            router.push({
-                                pathname: "/app/milestones",
-                                params: { highlightMonth: item.label }
-                            });
-                        }}
+                            data={compactChartData(prHistory)}
+                            height={130}
+                            width={chartWidth}
+                            maxValue={maxValue * 1.6}
+                            barWidth={16}
+                            initialSpacing={30}
+                            spacing={chartSpacing}
+                            barBorderRadius={3}
+                            frontColor={colors.tint}
+                            noOfSections={3}
+                            yAxisThickness={0}
+                            xAxisThickness={0}
+                            yAxisLabelWidth={30}
+                            yAxisTextStyle={{ color: colors.secondaryText, fontSize: 8, fontFamily: 'System' }}
+                            xAxisLabelTextStyle={{ color: "transparent", fontSize: 0, fontFamily: 'System' }}
+                            topLabelTextStyle={{ color: colors.text, fontSize: 8, fontWeight: '800', fontFamily: 'System' }}
+                            disableScroll
+                            endSpacing={16}
+                            onPress={(item: any) => {
+                                router.push({
+                                    pathname: "/app/milestones",
+                                    params: { highlightMonth: item.label }
+                                });
+                            }}
                     />
+                    {renderMonthLabels()}
                 </View>
             </View>
         );
@@ -424,7 +434,7 @@ export default function Analytics() {
         <View style={[styles.container, { backgroundColor: colors.background }]}>
             <View style={[styles.header, { paddingTop: insets.top + 10, borderBottomColor: colors.border }]}>
                 <Pressable onPress={handleBack} style={styles.backBtn}><Ionicons name="chevron-back" size={28} color={colors.text} /></Pressable>
-                <Text style={[styles.headerTitle, { color: colors.text }]}>Analytics</Text>
+                <Text style={[styles.headerTitle, { color: colors.text }]}>{t("app.analytics.title")}</Text>
                 <View style={{ width: 40 }} />
             </View>
 
@@ -451,9 +461,9 @@ export default function Analytics() {
                     {renderStrengthTrend()}
                     {strengthStats && (
                         <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                            <Text style={[styles.cardTitle, { color: colors.secondaryText }]}>Strength Standards (SBD)</Text>
+                            <Text style={[styles.cardTitle, { color: colors.secondaryText }]}>{t("app.analytics.strength_standards")}</Text>
                             <View style={styles.strengthGrid}>
-                                <View style={styles.scoreBox}><Text style={[styles.scoreLabel, { color: colors.tint }]}>DOTS</Text><Text style={[styles.scoreValue, { color: colors.text }]}>{strengthStats.dots}</Text></View>
+                                <View style={styles.scoreBox}><Text style={[styles.scoreLabel, { color: colors.tint }]}>{t("app.analytics.score")}</Text><Text style={[styles.scoreValue, { color: colors.text }]}>{strengthStats.dots}</Text></View>
                                 <View style={styles.scoreBox}><Text style={[styles.scoreLabel, { color: "#5856D6" }]}>WILKS</Text><Text style={[styles.scoreValue, { color: colors.text }]}>{strengthStats.wilks}</Text></View>
                             </View>
                             <View style={[styles.totalRow, { borderTopColor: colors.border }]}>
@@ -470,13 +480,13 @@ export default function Analytics() {
                     )}
                     {renderPRHistory()}
                     <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                        <Text style={[styles.cardTitle, { color: colors.secondaryText }]}>Most Frequent Exercises</Text>
+                        <Text style={[styles.cardTitle, { color: colors.secondaryText }]}>{t("app.analytics.most_frequent")}</Text>
                         <View style={styles.distList}>
                             {topExercises.map((item, index) => (
                                 <View key={index} style={styles.distRow}>
                                     <View style={styles.distInfo}><Text style={[styles.distName, { color: colors.text }]} numberOfLines={1}>{item.name}</Text><Text style={[styles.distCount, { color: colors.secondaryText }]}>{item.count} sets</Text></View>
                                     <View style={[styles.barBg, { backgroundColor: colors.secondary }]}>
-                                        {topExercises[0].count > 0 && (
+                                        {topExercises.length > 0 && topExercises[0].count > 0 && (
                                             <View style={[styles.barFill, { backgroundColor: colors.tint, width: `${(item.count / topExercises[0].count) * 100}%` }]} />
                                         )}
                                     </View>
@@ -485,13 +495,13 @@ export default function Analytics() {
                         </View>
                     </View>
                     <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                        <Text style={[styles.cardTitle, { color: colors.secondaryText }]}>Muscle Distribution (Sets)</Text>
+                        <Text style={[styles.cardTitle, { color: colors.secondaryText }]}>{t("app.analytics.muscle_distribution")}</Text>
                         <View style={styles.distList}>
                             {muscleDist.map((item, index) => (
                                 <View key={item.name} style={styles.distRow}>
                                     <View style={styles.distInfo}><Text style={[styles.distName, { color: colors.text }]}>{item.name}</Text><Text style={[styles.distCount, { color: colors.secondaryText }]}>{item.count} sets</Text></View>
                                     <View style={[styles.barBg, { backgroundColor: colors.secondary }]}>
-                                        {muscleDist[0].count > 0 && (
+                                        {muscleDist.length > 0 && muscleDist[0].count > 0 && (
                                             <View style={[styles.barFill, { backgroundColor: colors.tint, width: `${(item.count / muscleDist[0].count) * 100}%` }]} />
                                         )}
                                     </View>
@@ -514,9 +524,12 @@ const styles = StyleSheet.create({
     yearList: { paddingHorizontal: 16, alignItems: 'center', gap: 12 },
     yearTab: { paddingHorizontal: 16, paddingVertical: 6, borderRadius: 16, backgroundColor: 'rgba(128,128,128,0.1)' },
     yearText: { fontSize: 13, fontWeight: '700' },
-    content: { padding: 16, gap: 16 },
+    content: { width: "100%", maxWidth: 1120, alignSelf: "center", padding: 16, gap: 16 },
     center: { flex: 1, justifyContent: "center", alignItems: "center" },
     card: { padding: 16, borderRadius: 16, borderWidth: 1 },
+    chartViewport: { width: "100%", marginTop: 25, paddingLeft: 10, overflow: "hidden" },
+    monthLabels: { flexDirection: "row", justifyContent: "space-between", paddingLeft: 45, paddingRight: 25, marginTop: -8 },
+    monthLabel: { width: 18, fontSize: 8, textAlign: "center" },
     cardTitle: { fontSize: 12, fontWeight: "700", textTransform: "uppercase", marginBottom: 16 },
     cardHeaderWithAction: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 },
     viewAllBtn: { fontSize: 10, fontWeight: "900" },
@@ -525,11 +538,11 @@ const styles = StyleSheet.create({
     scoreBox: { flex: 1, alignItems: "center", padding: 12, borderRadius: 12, backgroundColor: "rgba(128,128,128,0.05)" },
     scoreLabel: { fontSize: 10, fontWeight: "900", marginBottom: 4 },
     scoreValue: { fontSize: 24, fontWeight: "900", fontFamily: "System" },
-    totalRow: { flexDirection: "row", justifyContent: "space-around", paddingTop: 16, borderTopWidth: 1, marginBottom: 20 },
+    totalRow: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-around", paddingTop: 16, borderTopWidth: 1, marginBottom: 20 },
     totalItem: { alignItems: "center" },
     totalLabel: { fontSize: 10, fontWeight: "700", textTransform: "uppercase", marginBottom: 2 },
     totalValue: { fontSize: 16, fontWeight: "800" },
-    sbdBreakdown: { flexDirection: "row", justifyContent: "center", gap: 32 },
+    sbdBreakdown: { flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: 32 },
     sbdItem: { flexDirection: "row", alignItems: "baseline", gap: 4 },
     sbdLabel: { fontSize: 12, fontWeight: "900" },
     sbdValue: { fontSize: 18, fontWeight: "800" },

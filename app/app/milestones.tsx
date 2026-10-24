@@ -137,11 +137,11 @@ export default function Milestones() {
                 </View>
                 <View style={styles.statsRow}>
                     <View style={styles.stat}>
-                        <Text style={[styles.statLabel, { color: colors.secondaryText }]}>LIFT</Text>
+                        <Text style={[styles.statLabel, { color: colors.secondaryText }]}>{t("app.milestones.lift")}</Text>
                         <Text style={[styles.statValue, { color: colors.text }]}>{item.weight_kg}kg x {item.reps}</Text>
                     </View>
                     <View style={styles.stat}>
-                        <Text style={[styles.statLabel, { color: colors.secondaryText }]}>EST. 1RM</Text>
+                        <Text style={[styles.statLabel, { color: colors.secondaryText }]}>{t("app.milestones.estimated_1rm")}</Text>
                         <Text style={[styles.statValue, { color: colors.tint }]}>{item.one_rm}kg</Text>
                     </View>
                     <Ionicons name="chevron-forward" size={20} color={colors.border} />
@@ -164,7 +164,7 @@ export default function Milestones() {
                 <Pressable onPress={handleBack} style={styles.backBtn}>
                     <Ionicons name="chevron-back" size={28} color={colors.text} />
                 </Pressable>
-                <Text style={[styles.headerTitle, { color: colors.text }]}>All Milestones</Text>
+                <Text style={[styles.headerTitle, { color: colors.text }]}>{t("app.milestones.title")}</Text>
                 <View style={{ width: 40 }} />
             </View>
 
@@ -179,7 +179,7 @@ export default function Milestones() {
                     ListEmptyComponent={
                         <View style={styles.empty}>
                             <Ionicons name="trophy-outline" size={64} color={colors.border} />
-                            <Text style={[styles.emptyText, { color: colors.secondaryText }]}>No milestones yet. Keep training!</Text>
+                            <Text style={[styles.emptyText, { color: colors.secondaryText }]}>{t("app.milestones.empty")}</Text>
                         </View>
                     }
                 />

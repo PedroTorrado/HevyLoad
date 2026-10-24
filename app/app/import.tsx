@@ -69,9 +69,9 @@ export default function Import() {
             
             if (content) {
                 setImportText(content);
-                Alert.alert("File Loaded", `Loaded ${asset.name}. Click "Import Data" to proceed.`);
+                Alert.alert(t("app.import.file_loaded"), t("app.import.file_loaded_message", { name: asset.name }));
             } else {
-                Alert.alert("Error", "The selected file appears to be empty.");
+                Alert.alert(t("app.import.error"), t("app.import.empty_file"));
             }
         } catch (error: any) {
             console.error("File pick error:", error);
@@ -114,7 +114,7 @@ export default function Import() {
 
     async function handleImport() {
         if (!importText.trim()) {
-            Alert.alert("Error", "Please paste your Hevy export data.");
+            Alert.alert(t("app.import.error"), t("app.import.empty_data"));
             return;
         }
 
@@ -454,7 +454,7 @@ export default function Import() {
                 <Pressable onPress={handleBack} style={styles.backBtn}>
                     <Ionicons name="chevron-back" size={28} color={colors.text} />
                 </Pressable>
-                <Text style={[styles.headerTitle, { color: colors.text }]}>Import Hevy Data</Text>
+                <Text style={[styles.headerTitle, { color: colors.text }]}>{t("app.import.title")}</Text>
                 <View style={{ width: 40 }} />
             </View>
 
@@ -468,12 +468,12 @@ export default function Import() {
                     onPress={pickFile}
                 >
                     <Ionicons name="document-text-outline" size={24} color={colors.tint} />
-                    <Text style={[styles.fileBtnText, { color: colors.tint }]}>Select CSV/TSV File</Text>
+                    <Text style={[styles.fileBtnText, { color: colors.tint }]}>{t("app.import.select_file")}</Text>
                 </Pressable>
 
                 <View style={styles.divider}>
                     <View style={[styles.line, { backgroundColor: colors.border }]} />
-                    <Text style={[styles.orText, { color: colors.secondaryText }]}>OR</Text>
+                    <Text style={[styles.orText, { color: colors.secondaryText }]}>{t("app.import.or")}</Text>
                     <View style={[styles.line, { backgroundColor: colors.border }]} />
                 </View>
 
@@ -487,7 +487,7 @@ export default function Import() {
                             borderColor: colors.border 
                         }
                     ]}
-                    placeholder="Paste data here..."
+                    placeholder={t("app.import.paste_placeholder")}
                     placeholderTextColor={colors.accentText}
                     value={importText}
                     onChangeText={setImportText}
@@ -505,7 +505,7 @@ export default function Import() {
                         style={[styles.importBtn, { backgroundColor: colors.tint }]} 
                         onPress={handleImport}
                     >
-                        <Text style={styles.importBtnText}>Import Data</Text>
+                        <Text style={styles.importBtnText}>{t("app.import.import_data")}</Text>
                     </Pressable>
                 )}
 
@@ -514,7 +514,7 @@ export default function Import() {
                     onPress={clearAllData}
                     disabled={loading}
                 >
-                    <Text style={[styles.clearBtnText, { color: colors.error }]}>Clear All Previous Data</Text>
+                    <Text style={[styles.clearBtnText, { color: colors.error }]}>{t("app.import.clear_all")}</Text>
                 </Pressable>
             </ScrollView>
         </View>

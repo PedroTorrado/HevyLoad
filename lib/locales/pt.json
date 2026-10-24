@@ -51,6 +51,14 @@
       "success": "Verifique o seu e-mail para o link de redefinição!",
       "back_to_signin": "← Voltar ao Iniciar Sessão"
     },
+    "reset_password": {
+      "title": "Escolha uma nova palavra-passe",
+      "subtitle": "Introduza e confirme a sua nova palavra-passe.",
+      "new_password": "Nova palavra-passe",
+      "confirm_password": "Confirmar nova palavra-passe",
+      "action": "Atualizar Palavra-passe",
+      "success": "A sua palavra-passe foi atualizada com sucesso."
+    },
     "passwordMismatch": "As palavras-passe não coincidem.",
     "passwordUpdated": "Palavra-passe atualizada com sucesso."
   },
@@ -74,6 +82,10 @@
         "quick_actions": "Ações Rápidas"
       },
       "modules": {
+        "suggestions": {
+          "title": "Sugestões de treino",
+          "desc": "Planeie o próximo treino com cargas personalizadas"
+        },
         "analytics": {
           "title": "Análise",
           "desc": "Mergulhe nas estatísticas dos seus treinos."
@@ -86,6 +98,38 @@
           "title": "Histórico Completo",
           "desc": "Navegue por todas as sessões registadas."
         }
+      },
+      "import": {
+        "title": "Importar Dados do Hevy",
+        "select_file": "Selecionar Ficheiro CSV/TSV",
+        "or": "OU",
+        "paste_placeholder": "Cole os dados aqui...",
+        "import_data": "Importar Dados",
+        "clear_all": "Apagar Todos os Dados Anteriores",
+        "file_loaded": "Ficheiro Carregado",
+        "file_loaded_message": "Ficheiro {{name}} carregado. Clique em \"Importar Dados\" para continuar.",
+        "error": "Erro",
+        "empty_file": "O ficheiro selecionado parece estar vazio.",
+        "empty_data": "Cole os dados exportados do Hevy.",
+        "success": "Sucesso",
+        "import_success": "Dados importados com sucesso!",
+        "clear_success": "Todos os dados foram apagados."
+      },
+      "sbd_total": "TOTAL SBD",
+      "weekly_tonnage": "TONELAGEM SEMANAL",
+      "big_three": "Os Três Grandes",
+      "accessories": "Acessórios e Destaques",
+      "activity": {
+        "title": "Atividade de treinos",
+        "less": "Menos",
+        "more": "Mais",
+        "monday": "Seg",
+        "wednesday": "Qua",
+        "friday": "Sex",
+        "volume": "Volume",
+        "time": "Tempo",
+        "rolling": "Último ano",
+        "year": "Ano"
       }
     },
     "history": {
@@ -99,7 +143,9 @@
       "start": "Início",
       "set": "Série",
       "weight": "Peso",
-      "reps": "Reps"
+      "reps": "Reps",
+      "weight_pr": "PR DE CARGA",
+      "one_rm_pr": "PR DE 1RM"
     },
     "exercises": {
       "title": "Exercícios",
@@ -125,7 +171,80 @@
       "camera": "Câmara",
       "gallery": "Galeria",
       "deleteAccount": "Apagar Conta",
-      "deleteAccountConfirm": "Isto irá apagar permanentemente a sua conta. Esta ação não pode ser desfeita."
+      "deleteAccountConfirm": "Isto irá apagar permanentemente a sua conta. Esta ação não pode ser desfeita.",
+      "bodyweight": "Peso corporal (kg)",
+      "gender": "Género",
+      "featured_lifts": "Exercícios em Destaque (Painel)",
+      "plate_preference": "Preferência de Discos"
+    },
+    "analytics": {
+      "title": "Análise",
+      "workout_frequency": "Frequência de Treino",
+      "volume_trend": "Tendência de Volume (milhares de kg)",
+      "strength_trend": "Tendência de Força (Total SBD Mensal)",
+      "milestones": "Marcos (Novos PRs)",
+      "view_all": "VER TODOS",
+      "strength_standards": "Referências de Força (SBD)",
+      "most_frequent": "Exercícios Mais Frequentes",
+      "muscle_distribution": "Distribuição Muscular (Séries)",
+      "sets": "séries",
+      "score": "PONTUAÇÃO DOTS",
+      "wilks": "WILKS",
+      "total": "TOTAL",
+      "bodyweight": "PESO CORPORAL",
+      "squat": "AGACHAMENTO",
+      "bench": "SUPINO",
+      "deadlift": "PESO MORTO"
+    },
+    "history_insights": {
+      "title": "Resumo Mensal",
+      "live": "ATUAL",
+      "consistency": "Consistência",
+      "volume": "Volume",
+      "training_split": "Distribuição do Treino",
+      "workouts_per_week": "treinos/sem",
+      "sets_per_week": "séries/sem",
+      "projection_workouts": "Prev.: {{count}} treinos",
+      "projection_sets": "Prev.: {{count}} séries"
+    },
+    "milestones": {
+      "title": "Todos os Marcos",
+      "lift": "CARGA",
+      "estimated_1rm": "1RM EST.",
+      "empty": "Ainda não há marcos. Continue a treinar!"
+    },
+    "suggestions": {
+      "eyebrow": "PLANEADOR DE TREINO",
+      "title": "Sugestões de treino",
+      "subtitle": "Siga a sua divisão de powerbuilding de quatro dias com cargas do seu histórico Hevy.",
+      "choose_session": "Escolha uma sessão",
+      "rolling_split": "Divisão contínua · complete A → B → C → D por ordem",
+      "push_pull_legs": "Push / Pull / Legs",
+      "push": "Empurrar",
+      "pull": "Puxar",
+      "legs": "Pernas",
+      "push_pull_legs_description": "Uma rotação de três dias com volume suficiente para cada grupo muscular.",
+      "upper_lower": "Parte Superior / Inferior",
+      "upper": "Parte superior",
+      "lower": "Parte inferior",
+      "upper_lower_description": "Uma divisão simples de quatro dias que equilibra frequência e recuperação.",
+      "full_body": "Corpo inteiro",
+      "full_body_description": "Uma sessão flexível para treinar duas a quatro vezes por semana.",
+      "session": "Sessão de {{split}}",
+      "working_sets": "Séries de trabalho sugeridas · 3 × 8–10",
+      "evidence": "Baseado numa série de trabalho normal de {{date}}",
+      "add_exercise": "Adicione um exercício para este grupo muscular",
+      "no_previous_load": "Sem carga anterior · comece com prudência",
+      "import_error": "Importe um ficheiro do Hevy ou verifique a ligação ao Supabase e tente novamente.",
+      "import_first": "Importe primeiro o seu histórico do Hevy",
+      "personalized": "As sugestões tornam-se personalizadas quando os seus exercícios e séries estão no Supabase.",
+      "go_back": "Voltar"
+    },
+    "exercise": {
+      "not_found": "Exercício não encontrado",
+      "new_pr": "NOVO PR",
+      "chart_hover_hint": "Passe o cursor sobre o gráfico para ver detalhes",
+      "chart_drag_hint": "Toque e arraste no gráfico para ver detalhes"
     }
   }
 }
