@@ -79,7 +79,8 @@
       },
       "sections": {
         "recent_workouts": "Recent Workouts",
-        "quick_actions": "Quick Actions"
+        "quick_actions": "Quick Actions",
+        "see_all": "See all"
       },
       "modules": {
         "suggestions": {
@@ -113,7 +114,31 @@
         "empty_data": "Please paste your Hevy export data.",
         "success": "Success",
         "import_success": "Data imported successfully!",
-        "clear_success": "All data has been cleared."
+        "clear_success": "All data has been cleared.",
+        "subtitle": "Bring your Hevy history into HevyLoad",
+        "how_title": "How to export from Hevy",
+        "step_1": "Open Hevy and go to Profile → Settings",
+        "step_2": "Tap \"Export & Import Data\" → \"Export Workouts\"",
+        "step_3": "Upload the CSV below, or paste its contents",
+        "file_section": "Upload file",
+        "file_hint": "CSV or TSV exported from Hevy",
+        "file_rows": "{{count}} rows ready to import",
+        "change": "Change",
+        "remove_file": "Remove file",
+        "paste_label": "Paste data",
+        "lines": "{{count}} lines",
+        "read_error": "Could not read the selected file.",
+        "nothing_new": "Nothing new",
+        "already_imported": "All workouts in this file have already been imported.",
+        "import_failed": "Import failed",
+        "import_success_count": "Imported {{count}} new workouts.",
+        "view_dashboard": "View dashboard",
+        "importing": "Importing...",
+        "danger_title": "Danger zone",
+        "danger_desc": "Permanently delete all workouts, sets and exercises from your account. This cannot be undone.",
+        "danger_confirm": "Are you sure? This will permanently erase all your workouts, sets, and exercise history. This cannot be undone.",
+        "delete_everything": "Delete everything",
+        "clear_failed": "Failed to clear data."
       },
       "sbd_total": "SBD TOTAL",
       "weekly_tonnage": "WEEKLY TONNAGE",
@@ -145,7 +170,13 @@
       "weight": "Weight",
       "reps": "Reps",
       "weight_pr": "WEIGHT PR",
-      "one_rm_pr": "1RM PR"
+      "one_rm_pr": "1RM PR",
+      "duration": "Duration",
+      "volume": "Volume",
+      "sets": "Sets",
+      "prs": "PRs",
+      "exercises": "Exercises",
+      "notes": "Notes"
     },
     "exercises": {
       "title": "Exercises",

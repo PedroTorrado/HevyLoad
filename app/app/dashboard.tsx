@@ -9,6 +9,24 @@ import { useThemeColor } from "../../lib/theme";
 import { usePreferences } from "../../lib/preferences";
 import { getLocalYYYYMMDD } from "../../lib/date-utils";
 
+type PressState = { pressed: boolean; hovered?: boolean };
+
+/** Shared press / hover feedback so every tappable dashboard card feels interactive. */
+const pressFeedback = ({ pressed, hovered }: PressState) => ({
+    opacity: pressed ? 0.75 : hovered ? 0.9 : 1,
+    transform: [{ scale: pressed ? 0.98 : 1 }],
+});
+
+function formatWorkoutMeta(workout: any) {
+    const sets: any[] = workout.sets || [];
+    const volume = Math.round(sets.reduce((sum, s) => sum + (Number(s.weight_kg) || 0) * (Number(s.reps) || 0), 0));
+    const minutes = workout.end_time
+        ? Math.round((new Date(workout.end_time).getTime() - new Date(workout.start_time).getTime()) / 60000)
+        : 0;
+    const duration = minutes > 0 ? (minutes >= 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : `${minutes}m`) : null;
+    return { setCount: sets.length, volume, duration };
+}
+
 type WorkoutCalendarProps = {
     workouts: { id: string; start_time: string; volume: number; durationMinutes: number }[];
     colors: ReturnType<typeof useThemeColor>;
@@ -587,7 +605,10 @@ export default function Dashboard() {
 
                     {/* Powerlifting Total Banner */}
                     {stats.powerliftingTotal > 0 && (
-                        <View style={[styles.totalBanner, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                        <Pressable
+                            onPress={() => router.push("/app/analytics" as any)}
+                            style={(state) => [styles.totalBanner, { backgroundColor: colors.card, borderColor: colors.border }, pressFeedback(state)]}
+                        >
                             <View>
                                 <Text style={[styles.totalLabel, { color: colors.secondaryText }]}>{t("app.dashboard.sbd_total")}</Text>
                                 <Text style={[styles.totalValue, { color: colors.text }]}>{stats.powerliftingTotal.toLocaleString()} <Text style={styles.unit}>kg</Text></Text>
@@ -595,23 +616,32 @@ export default function Dashboard() {
                             <View style={[styles.totalBadge, { backgroundColor: colors.tint + "20" }]}>
                                 <Ionicons name="trophy" size={24} color={colors.tint} />
                             </View>
-                        </View>
+                        </Pressable>
                     )}
 
                     {/* Stats Grid */}
                     <View style={styles.statsGrid}>
-                        <View style={[styles.statCard, { backgroundColor: colors.card }]}>
+                        <Pressable
+                            onPress={() => router.push("/app/history" as any)}
+                            style={(state) => [styles.statCard, { backgroundColor: colors.card }, pressFeedback(state)]}
+                        >
                             <Text style={[styles.statValue, { color: colors.text }]}>{stats.totalWorkouts}</Text>
                             <Text style={[styles.statLabel, { color: colors.secondaryText }]}>{t("app.dashboard.stats.workouts")}</Text>
-                        </View>
-                        <View style={[styles.statCard, { backgroundColor: colors.card }]}>
+                        </Pressable>
+                        <Pressable
+                            onPress={() => router.push("/app/history" as any)}
+                            style={(state) => [styles.statCard, { backgroundColor: colors.card }, pressFeedback(state)]}
+                        >
                             <Text style={[styles.statValue, { color: colors.text }]}>{stats.workoutsThisWeek}</Text>
                             <Text style={[styles.statLabel, { color: colors.secondaryText }]}>{t("app.dashboard.stats.this_week")}</Text>
-                        </View>
-                        <View style={[styles.statCard, { flex: 2, backgroundColor: colors.card }]}>
+                        </Pressable>
+                        <Pressable
+                            onPress={() => router.push("/app/analytics" as any)}
+                            style={(state) => [styles.statCard, { flex: 2, backgroundColor: colors.card }, pressFeedback(state)]}
+                        >
                             <Text style={[styles.statValue, { color: colors.text }]}>{stats.weeklyTonnage.toLocaleString()} kg</Text>
                             <Text style={[styles.statLabel, { color: colors.secondaryText }]}>{t("app.dashboard.weekly_tonnage")}</Text>
-                        </View>
+                        </Pressable>
                     </View>
 
                     {/* The Big 3 Showdown */}
@@ -630,7 +660,7 @@ export default function Dashboard() {
                                     return (
                                         <Pressable 
                                             key={lift.id} 
-                                            style={[styles.big3Card, { backgroundColor: theme.bg + "15", borderColor: theme.bg + "30" }]}
+                                            style={(state) => [styles.big3Card, { backgroundColor: theme.bg + "15", borderColor: theme.bg + "30" }, pressFeedback(state)]}
                                             onPress={() => router.push(`/app/exercise/${lift.id}` as any)}
                                         >
                                             <View style={[styles.big3Icon, { backgroundColor: theme.bg }]}>
@@ -654,7 +684,7 @@ export default function Dashboard() {
                                 {otherLifts.map((lift) => (
                                     <Pressable 
                                         key={lift.id} 
-                                        style={[styles.maxCard, { backgroundColor: colors.card }]}
+                                        style={(state) => [styles.maxCard, { backgroundColor: colors.card }, pressFeedback(state)]}
                                         onPress={() => router.push(`/app/exercise/${lift.id}` as any)}
                                     >
                                         <Text style={[styles.maxLiftName, { color: colors.secondaryText }]} numberOfLines={1}>{lift.name}</Text>
@@ -705,19 +735,50 @@ export default function Dashboard() {
                                 </Pressable>
                             ) : (
                                 <View style={styles.recentSection}>
-                                    <Text style={[styles.sectionTitle, { color: colors.accentText }]}>{t("app.dashboard.sections.recent_workouts")}</Text>
-                                    {recentWorkouts.map((workout) => (
-                                        <View key={workout.id} style={[styles.workoutItem, { borderBottomColor: colors.border }]}>
-                                            <View style={[styles.workoutIcon, { backgroundColor: colors.secondary }]}>
-                                                <Ionicons name="fitness" size={20} color={colors.text} />
-                                            </View>
-                                            <View style={{ flex: 1 }}>
-                                                <Text style={[styles.workoutTitle, { color: colors.text }]}>{workout.title || "Workout"}</Text>
-                                                <Text style={[styles.workoutDate, { color: colors.secondaryText }]}>{new Date(workout.start_time).toLocaleDateString()}</Text>
-                                            </View>
-                                            <Ionicons name="chevron-forward" size={16} color={colors.border} />
-                                        </View>
-                                    ))}
+                                    <View style={styles.recentHeader}>
+                                        <Text style={[styles.sectionTitle, { color: colors.accentText, marginBottom: 0 }]}>{t("app.dashboard.sections.recent_workouts")}</Text>
+                                        <Pressable
+                                            onPress={() => router.push("/app/history" as any)}
+                                            hitSlop={8}
+                                            style={(state) => [styles.seeAllBtn, pressFeedback(state)]}
+                                        >
+                                            <Text style={[styles.seeAllText, { color: colors.tint }]}>{t("app.dashboard.sections.see_all")}</Text>
+                                            <Ionicons name="chevron-forward" size={12} color={colors.tint} />
+                                        </Pressable>
+                                    </View>
+                                    <View style={[styles.recentCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                                        {recentWorkouts.map((workout, index) => {
+                                            const meta = formatWorkoutMeta(workout);
+                                            const isLast = index === recentWorkouts.length - 1;
+                                            return (
+                                                <Pressable
+                                                    key={workout.id}
+                                                    onPress={() => router.push(`/app/workout/${workout.id}` as any)}
+                                                    accessibilityRole="button"
+                                                    accessibilityLabel={workout.title || "Workout"}
+                                                    style={({ pressed, hovered }: PressState) => [
+                                                        styles.workoutItem,
+                                                        !isLast && { borderBottomWidth: 1, borderBottomColor: colors.border },
+                                                        (pressed || hovered) && { backgroundColor: colors.secondary + (pressed ? "" : "80") },
+                                                    ]}
+                                                >
+                                                    <View style={[styles.workoutIcon, { backgroundColor: colors.tint + "1F" }]}>
+                                                        <Ionicons name="fitness" size={20} color={colors.tint} />
+                                                    </View>
+                                                    <View style={{ flex: 1 }}>
+                                                        <Text style={[styles.workoutTitle, { color: colors.text }]} numberOfLines={1}>{workout.title || "Workout"}</Text>
+                                                        <Text style={[styles.workoutDate, { color: colors.secondaryText }]} numberOfLines={1}>
+                                                            {new Date(workout.start_time).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })}
+                                                            {meta.duration ? ` · ${meta.duration}` : ""}
+                                                            {` · ${meta.setCount} ${t("app.workout.sets").toLowerCase()}`}
+                                                            {meta.volume > 0 ? ` · ${meta.volume.toLocaleString()} kg` : ""}
+                                                        </Text>
+                                                    </View>
+                                                    <Ionicons name="chevron-forward" size={16} color={colors.secondaryText} />
+                                                </Pressable>
+                                            );
+                                        })}
+                                    </View>
                                 </View>
                             )}
 
@@ -725,7 +786,7 @@ export default function Dashboard() {
                             <Text style={[styles.sectionTitle, { color: colors.accentText }]}>{t("app.dashboard.sections.quick_actions")}</Text>
                             <View style={styles.modulesGrid}>
                                 {NAV_ITEMS.map((item) => (
-                                    <Pressable key={item.title} style={[styles.navCard, { backgroundColor: colors.background, borderColor: colors.border }]} onPress={() => router.push(item.route as any)}>
+                                    <Pressable key={item.title} style={(state) => [styles.navCard, { backgroundColor: colors.background, borderColor: colors.border }, pressFeedback(state)]} onPress={() => router.push(item.route as any)}>
                                         <View style={[styles.iconBadge, { backgroundColor: item.color + "10" }]}>
                                             <Ionicons name={item.icon} size={24} color={item.color} />
                                         </View>
@@ -1033,16 +1094,25 @@ const styles = StyleSheet.create({
     sectionTitle: { fontSize: 13, fontWeight: "800", textTransform: "uppercase", letterSpacing: 1, marginBottom: 16, fontFamily: "System" },
     
     recentSection: { marginBottom: 32 },
+    recentHeader: {
+        flexDirection: "row",
+        justifyContent: "space-between",
+        alignItems: "center",
+        marginBottom: 16,
+    },
+    seeAllBtn: { flexDirection: "row", alignItems: "center", gap: 2 },
+    seeAllText: { fontSize: 12, fontWeight: "800", fontFamily: "System" },
+    recentCard: { borderRadius: 16, borderWidth: 1, overflow: "hidden" },
     workoutItem: {
         flexDirection: "row",
         alignItems: "center",
         paddingVertical: 12,
-        borderBottomWidth: 1,
+        paddingHorizontal: 16,
     },
     workoutIcon: {
         width: 40,
         height: 40,
-        borderRadius: 8,
+        borderRadius: 10,
         justifyContent: "center",
         alignItems: "center",
         marginRight: 16,

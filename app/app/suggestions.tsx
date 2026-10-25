@@ -13,7 +13,9 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "../../lib/supabase";
 import { useThemeColor } from "../../lib/theme";
-import { TRAINING_PROGRAMS, TrainingExerciseTarget } from "../../lib/training-program";
+import { TRAINING_PROGRAMS, TrainingExerciseTarget, TrainingProgram } from "../../lib/training-program";
+import { CustomProgram, getProgramWeeks, loadActiveCustomProgram } from "../../lib/custom-programs";
+import { Adjustment, ProgramStatus, syncProgramProgress } from "../../lib/program-progress";
 import {
     createEvidenceWindow,
     ExerciseEvidence,
@@ -44,6 +46,23 @@ export default function Suggestions() {
     const [performances, setPerformances] = useState<TrainingPerformance[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [customProgram, setCustomProgram] = useState<CustomProgram | null>(null);
+    const [status, setStatus] = useState<ProgramStatus | null>(null);
+
+    useEffect(() => {
+        (async () => {
+            try {
+                const active = await loadActiveCustomProgram();
+                setCustomProgram(active);
+                if (!active) return;
+                const programStatus = await syncProgramProgress(active);
+                setStatus(programStatus);
+                setSessionIndex(programStatus.position.sessionIndex);
+            } catch (programError) {
+                console.error("Custom program load error:", programError);
+            }
+        })();
+    }, []);
 
     useEffect(() => {
         async function loadSuggestionData() {
@@ -102,7 +121,39 @@ export default function Suggestions() {
         loadSuggestionData();
     }, []);
 
-    const selectedProgram = TRAINING_PROGRAMS[programIndex];
+    const programs = useMemo<(TrainingProgram & { loadPercents?: Record<string, number>; adjustments?: Record<string, Adjustment[]> })[]>(() => {
+        if (!customProgram) return TRAINING_PROGRAMS;
+        const weeks = getProgramWeeks(customProgram);
+        const week = weeks[(status?.position.week ?? 1) - 1] ?? weeks[0];
+        const loadPercents: Record<string, number> = {};
+        const adjustments: Record<string, Adjustment[]> = {};
+        const sessions = week.sessions.map((session, index) => {
+            const adapted = status && index === status.position.sessionIndex ? status.nextExercises : null;
+            return {
+                ...session,
+                exercises: (adapted ?? session.exercises).map((exercise) => {
+                    if (adapted) {
+                        if (exercise.prescription.loadPercent) loadPercents[exercise.key] = exercise.prescription.loadPercent;
+                        adjustments[exercise.key] = (exercise as typeof adapted[number]).adjustments;
+                    }
+                    return { ...exercise, sets: exercise.prescription.sets, reps: exercise.prescription.reps };
+                }),
+            };
+        });
+        const custom = {
+            key: "custom",
+            title: customProgram.name,
+            purpose: `Week ${week.week}/${weeks.length} · ${week.phase === "deload" ? "Deload" : "Build"}`,
+            description: "Your custom program. Each session adapts to how your last workouts went and how much rest you've had.",
+            frequency: `${customProgram.sessionsPerWeek} sessions · ${customProgram.scheduleMode}`,
+            sessions,
+            loadPercents,
+            adjustments,
+        };
+        return [custom, ...TRAINING_PROGRAMS];
+    }, [customProgram, status]);
+
+    const selectedProgram = programs[Math.min(programIndex, programs.length - 1)];
     const selectedSession = selectedProgram.sessions[sessionIndex % selectedProgram.sessions.length];
     const suggestions = useMemo(() => {
         const evidenceWindow = createEvidenceWindow();
@@ -121,7 +172,8 @@ export default function Suggestions() {
             const exercise = rankedCandidates[0];
             if (exercise) usedExerciseIds.add(exercise.id);
             const evidence = exercise ? getEvidence(exercise.id) : null;
-            const load = suggestedLoadFromEvidence(evidence);
+            const percent = selectedProgram.loadPercents?.[target.key];
+            const load = suggestedLoadFromEvidence(evidence, percent ? percent / 100 : 0.7);
             return { target, exercise, load, evidence };
         }).filter((suggestion): suggestion is {
             target: TrainingExerciseTarget;
@@ -129,7 +181,9 @@ export default function Suggestions() {
             load: number | null;
             evidence: ExerciseEvidence | null;
         } => Boolean(suggestion.exercise));
-    }, [exercises, performances, selectedSession]);
+    }, [exercises, performances, selectedSession, selectedProgram]);
+    const sessionAdjustments = selectedProgram.adjustments ?? {};
+    const globalNotes = programIndex === 0 && status ? status.adjustments.filter((a) => a.targetKey === null) : [];
     const matchedCount = suggestions.length;
     const totalExercises = selectedSession.exercises.length;
 
@@ -159,8 +213,29 @@ export default function Suggestions() {
                     </View>
                     <Ionicons name="chevron-forward" size={18} color="#FFF" />
                 </Pressable>
+                {customProgram && status && (
+                    <View style={[styles.statusCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                        <Text style={[styles.statusTitle, { color: colors.text }]}>
+                            Week {status.position.week} · {status.position.phase === "deload" ? "Deload" : "Build"} · next: {status.position.session.title}
+                        </Text>
+                        <Text style={[styles.statusLine, { color: colors.secondaryText }]}>
+                            {status.recovery.hoursSinceLastWorkout == null
+                                ? "No recent workouts"
+                                : `Last workout ${status.recovery.hoursSinceLastWorkout < 36 ? `${Math.round(status.recovery.hoursSinceLastWorkout)}h` : `${Math.round(status.recovery.hoursSinceLastWorkout / 24)} days`} ago`}
+                            {status.lastMatch ? ` · ${Math.round(status.lastMatch.muscleCoverage * 100)}% muscles on plan` : ""}
+                            {status.lastMatch?.avgRpeDelta != null ? ` · RPE ${status.lastMatch.avgRpeDelta >= 0 ? "+" : ""}${status.lastMatch.avgRpeDelta.toFixed(1)} vs target` : ""}
+                            {status.position.missedSessions ? ` · ${status.position.missedSessions} missed` : ""}
+                        </Text>
+                        {globalNotes.map((note) => (
+                            <Text key={note.kind} style={[styles.statusNote, { color: colors.tint }]}>• {note.reason}</Text>
+                        ))}
+                        <Pressable onPress={() => router.push("/app/program-guide")} accessibilityRole="link">
+                            <Text style={[styles.statusNote, { color: colors.tint }]}>Why these changes? →</Text>
+                        </Pressable>
+                    </View>
+                )}
                 <View style={styles.programList}>
-                    {TRAINING_PROGRAMS.map((item, index) => {
+                    {programs.map((item, index) => {
                         const isSelected = index === programIndex;
                         return (
                             <Pressable
@@ -280,6 +355,11 @@ export default function Suggestions() {
                                             ? t("app.suggestions.evidence", { date: new Date(suggestion.evidence.performance.start_time).toLocaleDateString() })
                                             : t("app.suggestions.no_previous_load")}
                                     </Text>
+                                    {(sessionAdjustments[suggestion.target.key] ?? []).map((adjustment) => (
+                                        <Text key={adjustment.kind + adjustment.reason} style={[styles.adjustmentBadge, { color: colors.tint, backgroundColor: colors.tint + "18" }]}>
+                                            {adjustment.reason}
+                                        </Text>
+                                    ))}
                                 </View>
                                 <View style={[styles.prescription, { backgroundColor: suggestion.load ? colors.tint : colors.secondary }]}>
                                     <Text style={[styles.loadText, { color: suggestion.load ? "#FFF" : colors.secondaryText }]}>
@@ -317,6 +397,11 @@ const styles = StyleSheet.create({
     customProgramButtonCopy: { flex: 1, marginHorizontal: 10 },
     customProgramButtonTitle: { color: "#FFF", fontSize: 14, fontWeight: "900" },
     customProgramButtonSubtitle: { color: "rgba(255,255,255,0.8)", fontSize: 11, marginTop: 3 },
+    statusCard: { borderRadius: 12, borderWidth: 1, padding: 12, marginBottom: 14 },
+    statusTitle: { fontSize: 14, fontWeight: "800" },
+    statusLine: { fontSize: 12, marginTop: 4 },
+    statusNote: { fontSize: 12, marginTop: 6, fontWeight: "600" },
+    adjustmentBadge: { fontSize: 11, fontWeight: "600", marginTop: 4, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, alignSelf: "flex-start", overflow: "hidden" },
     programList: { gap: 8, marginBottom: 6 },
     programCard: { minHeight: 78, padding: 10, borderRadius: 12, borderWidth: 1.5 },
     programCardTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 6 },

@@ -79,7 +79,8 @@
       },
       "sections": {
         "recent_workouts": "Treinos Recentes",
-        "quick_actions": "Ações Rápidas"
+        "quick_actions": "Ações Rápidas",
+        "see_all": "Ver todos"
       },
       "modules": {
         "suggestions": {
@@ -113,7 +114,31 @@
         "empty_data": "Cole os dados exportados do Hevy.",
         "success": "Sucesso",
         "import_success": "Dados importados com sucesso!",
-        "clear_success": "Todos os dados foram apagados."
+        "clear_success": "Todos os dados foram apagados.",
+        "subtitle": "Traga o seu histórico do Hevy para o HevyLoad",
+        "how_title": "Como exportar do Hevy",
+        "step_1": "Abra o Hevy e vá a Perfil → Definições",
+        "step_2": "Toque em \"Exportar e Importar Dados\" → \"Exportar Treinos\"",
+        "step_3": "Carregue o CSV abaixo ou cole o seu conteúdo",
+        "file_section": "Carregar ficheiro",
+        "file_hint": "CSV ou TSV exportado do Hevy",
+        "file_rows": "{{count}} linhas prontas a importar",
+        "change": "Alterar",
+        "remove_file": "Remover ficheiro",
+        "paste_label": "Colar dados",
+        "lines": "{{count}} linhas",
+        "read_error": "Não foi possível ler o ficheiro selecionado.",
+        "nothing_new": "Nada de novo",
+        "already_imported": "Todos os treinos deste ficheiro já foram importados.",
+        "import_failed": "Falha na importação",
+        "import_success_count": "{{count}} novos treinos importados.",
+        "view_dashboard": "Ver painel",
+        "importing": "A importar...",
+        "danger_title": "Zona de perigo",
+        "danger_desc": "Apaga permanentemente todos os treinos, séries e exercícios da sua conta. Esta ação não pode ser desfeita.",
+        "danger_confirm": "Tem a certeza? Isto irá apagar permanentemente todos os seus treinos, séries e histórico de exercícios. Esta ação não pode ser desfeita.",
+        "delete_everything": "Apagar tudo",
+        "clear_failed": "Falha ao apagar os dados."
       },
       "sbd_total": "TOTAL SBD",
       "weekly_tonnage": "TONELAGEM SEMANAL",
@@ -145,7 +170,13 @@
       "weight": "Peso",
       "reps": "Reps",
       "weight_pr": "PR DE CARGA",
-      "one_rm_pr": "PR DE 1RM"
+      "one_rm_pr": "PR DE 1RM",
+      "duration": "Duração",
+      "volume": "Volume",
+      "sets": "Séries",
+      "prs": "PRs",
+      "exercises": "Exercícios",
+      "notes": "Notas"
     },
     "exercises": {
       "title": "Exercícios",
