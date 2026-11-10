@@ -67,7 +67,7 @@ const defaultRestSeconds = (target: TrainingExerciseTarget) =>
 
 const BASE_RPE: Record<CustomStyle, number> = { heavy: 7, moderate: 7.5, "high-rep": 8, mixed: 7.5 };
 
-function toCustomSession(session: TrainingSession, style: CustomStyle): CustomSession {
+function toCustomSession(session: TrainingSession, style: CustomStyle, goal: CustomGoal): CustomSession {
     return {
         ...session,
         exercises: session.exercises.map((exercise) => ({
@@ -75,7 +75,7 @@ function toCustomSession(session: TrainingSession, style: CustomStyle): CustomSe
             prescription: {
                 sets: exercise.sets,
                 reps: exercise.reps,
-                loadPercent: exercise.movementPattern || exercise.group === "Deadlift" ? 70 : undefined,
+                loadPercent: goal === "strength" && (exercise.movementPattern || exercise.group === "Deadlift") ? 85 : undefined,
                 targetRpe: BASE_RPE[style],
                 rir: style === "high-rep" ? 1 : 2,
                 restSeconds: defaultRestSeconds(exercise),
@@ -181,7 +181,7 @@ export function generateCustomProgram(input: {
     const includeDeload = input.includeDeload ?? true;
     const sessionsPerWeek = Math.min(5, Math.max(2, Math.round(input.sessionsPerWeek)));
     const base = pickTemplate(input.goal, sessionsPerWeek)
-        .map((session) => toCustomSession(session, input.style))
+        .map((session) => toCustomSession(session, input.style, input.goal))
         .map((session) => (input.sessionMinutes ? trimToDuration(session, input.sessionMinutes) : session));
 
     const weeks: CustomWeek[] = Array.from({ length: input.blockLengthWeeks }, (_, i) => {
@@ -286,5 +286,4 @@ export async function saveCustomProgram(program: CustomProgram, activate = true)
 
     return { ...fromRow({ ...(data as ProgramRow), activated_at: null }), isActive: activate };
 }
-
 

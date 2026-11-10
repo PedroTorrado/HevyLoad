@@ -28,7 +28,7 @@ function formatWorkoutMeta(workout: any) {
 }
 
 type WorkoutCalendarProps = {
-    workouts: { id: string; start_time: string; volume: number; durationMinutes: number }[];
+    workouts: { id: string; start_time: string; title?: string | null; volume: number; durationMinutes: number; isRun?: boolean; runKm?: number; runSeconds?: number }[];
     colors: ReturnType<typeof useThemeColor>;
     onWorkoutPress: (workoutId: string) => void;
     title: string;
@@ -58,11 +58,28 @@ function WorkoutCalendar({
     const [selectedPeriod, setSelectedPeriod] = useState<"rolling" | number>("rolling");
     const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null);
     const workoutTotals = new Map<string, number>();
-    const workoutsByDate = new Map<string, { id: string; start_time: string }[]>();
+    const workoutsByDate = new Map<string, { id: string; start_time: string; title?: string | null; isRun?: boolean }[]>();
+    const runTotals = new Map<string, { km: number; seconds: number }>();
     workouts.forEach((workout) => {
         const date = getLocalYYYYMMDD(new Date(workout.start_time));
-        const value = metric === "volume" ? workout.volume : workout.durationMinutes;
-        workoutTotals.set(date, (workoutTotals.get(date) || 0) + value);
+        if (workout.isRun) {
+            const prev = runTotals.get(date) || { km: 0, seconds: 0 };
+            runTotals.set(date, {
+                km: prev.km + (workout.runKm || 0),
+                seconds: prev.seconds + (workout.runSeconds || workout.durationMinutes * 60),
+            });
+        } else {
+            const value = metric === "volume" ? workout.volume : workout.durationMinutes;
+            workoutTotals.set(date, (workoutTotals.get(date) || 0) + value);
+            // Running inside a strength session: count only the run sets themselves.
+            if ((workout.runKm || 0) > 0 || (workout.runSeconds || 0) > 0) {
+                const prev = runTotals.get(date) || { km: 0, seconds: 0 };
+                runTotals.set(date, {
+                    km: prev.km + (workout.runKm || 0),
+                    seconds: prev.seconds + (workout.runSeconds || 0),
+                });
+            }
+        }
         const dateWorkouts = workoutsByDate.get(date) || [];
         dateWorkouts.push(workout);
         workoutsByDate.set(date, dateWorkouts);
@@ -93,11 +110,23 @@ function WorkoutCalendar({
             date.setDate(monday.getDate() + weekIndex * 7 + dayIndex);
             const key = getLocalYYYYMMDD(date);
             const isInRange = date >= rangeStart && date <= rangeEnd;
-            return { key, value: isInRange ? workoutTotals.get(key) || 0 : 0, date };
+            const run = isInRange ? runTotals.get(key) : undefined;
+            return {
+                key,
+                value: isInRange ? workoutTotals.get(key) || 0 : 0,
+                runKm: run?.km || 0,
+                runMinutes: run ? Math.round(run.seconds / 60) : 0,
+                /** Seconds per km; null when no distance was logged. */
+                pace: run && run.km > 0 && run.seconds > 0 ? run.seconds / run.km : null,
+                date,
+            };
         })
     );
 
     const maxValue = Math.max(...weeks.flat().map((day) => day.value), 1);
+    const paces = weeks.flat().map((day) => day.pace).filter((p): p is number => p !== null);
+    const fastestPace = paces.length ? Math.min(...paces) : 0;
+    const slowestPace = paces.length ? Math.max(...paces) : 0;
     const getCellColor = (value: number) => {
         if (value === 0) return colors.secondary;
         const intensity = value / maxValue;
@@ -105,6 +134,25 @@ function WorkoutCalendar({
         if (intensity <= 0.5) return "#60A5FA";
         if (intensity <= 0.75) return "#2563EB";
         return "#1E3A8A";
+    };
+    /** Purple scale for runs, by pace: faster (lower sec/km) = darker. */
+    const getRunColor = (pace: number | null) => {
+        if (pace === null) return "#C084FC";
+        const intensity = slowestPace === fastestPace ? 1 : (slowestPace - pace) / (slowestPace - fastestPace);
+        if (intensity <= 0.25) return "#C084FC";
+        if (intensity <= 0.5) return "#A855F7";
+        if (intensity <= 0.75) return "#7E22CE";
+        return "#581C87";
+    };
+    const formatPace = (pace: number) => {
+        const total = Math.round(pace);
+        return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")} /km`;
+    };
+    const isInRangeDay = (day: { date: Date }) => day.date >= rangeStart && day.date <= rangeEnd;
+    const getDayColor = (day: { value: number; runMinutes: number; pace: number | null; key: string }) => {
+        if (day.value > 0) return getCellColor(day.value);
+        if (day.runMinutes > 0 || workoutsByDate.get(day.key)?.some((w) => w.isRun)) return getRunColor(day.pace);
+        return colors.secondary;
     };
 
     const getDayAtPoint = (x: number, y: number) => {
@@ -197,13 +245,20 @@ function WorkoutCalendar({
                 >
                     <View style={styles.activitySelectionHeader}>
                         <Text style={[styles.activitySelectionDate, { color: selectedWorkout ? colors.tint : colors.text }]}>
-                            {selectedDateLabel || "Select a workout day"}
+                            {selectedWorkout
+                                ? `${workoutsByDate.get(selectedDay!.key)!.map((w) => w.title || "Workout").join(" + ")} · ${selectedDateLabel}`
+                                : selectedDateLabel || "Select a workout day"}
                         </Text>
                         {selectedWorkout && <Ionicons name="arrow-forward-circle" size={17} color={colors.tint} />}
                     </View>
                     {selectedDay && (
                         <Text style={[styles.activitySelectionValue, { color: colors.secondaryText }]}>
-                            {selectedDay.value} {metric === "volume" ? "kg" : "min"}
+                            {[
+                                selectedDay.value > 0 ? `${Math.round(selectedDay.value)} ${metric === "volume" ? "kg" : "min"}` : "",
+                                selectedDay.runMinutes > 0
+                                    ? `Run ${selectedDay.runKm > 0 ? `${selectedDay.runKm.toFixed(2)} km · ` : ""}${selectedDay.runMinutes} min${selectedDay.pace ? ` · ${formatPace(selectedDay.pace)}` : ""}`
+                                    : "",
+                            ].filter(Boolean).join(" · ") || `0 ${metric === "volume" ? "kg" : "min"}`}
                             {selectedWorkout ? " · Tap the date to open workout" : ""}
                         </Text>
                     )}
@@ -255,8 +310,9 @@ function WorkoutCalendar({
                                             >
                                                 <View style={[
                                                     styles.activityCell,
+                                                    isInRangeDay(day) && day.value > 0 && (day.runMinutes > 0 || day.runKm > 0) && styles.activityCellMixed,
                                                     selectedDayKey === day.key && styles.activityCellSelected,
-                                                    { backgroundColor: getCellColor(day.value) },
+                                                    { backgroundColor: isInRangeDay(day) ? getDayColor(day) : colors.secondary },
                                                 ]} />
                                             </Pressable>
                                             );
@@ -274,6 +330,11 @@ function WorkoutCalendar({
                         <View key={level} style={[styles.activityCell, { backgroundColor: level === 0 ? colors.secondary : getCellColor(level * maxValue) }]} />
                     ))}
                     <Text style={[styles.activityLegendText, { color: colors.secondaryText }]}>{moreLabel}</Text>
+                    <Text style={[styles.activityLegendText, { color: colors.secondaryText, marginLeft: 10 }]}>Run pace: slower</Text>
+                    {["#C084FC", "#A855F7", "#7E22CE", "#581C87"].map((shade) => (
+                        <View key={shade} style={[styles.activityCell, { backgroundColor: shade }]} />
+                    ))}
+                    <Text style={[styles.activityLegendText, { color: colors.secondaryText }]}>faster</Text>
                 </View>
             </View>
         </View>
@@ -357,7 +418,7 @@ export default function Dashboard() {
         powerliftingTotal: 0
     });
     const [recentWorkouts, setRecentWorkouts] = useState<any[]>([]);
-    const [activityWorkouts, setActivityWorkouts] = useState<{ id: string; start_time: string; volume: number; durationMinutes: number }[]>([]);
+    const [activityWorkouts, setActivityWorkouts] = useState<{ id: string; start_time: string; title?: string | null; volume: number; durationMinutes: number }[]>([]);
     const [sbdLifts, setSbdLifts] = useState<{name: string, value: number, id: string, type: string}[]>([]);
     const [otherLifts, setOtherLifts] = useState<{name: string, value: number, id: string}[]>([]);
 
@@ -385,7 +446,7 @@ export default function Dashboard() {
             // 1. Fetch Profile, Workouts, and Exercises
             const [profileRes, workoutsRes, exercisesRes, totalCountRes] = await Promise.all([
                 supabase.from("profiles").select("full_name, avatar_url, featured_exercise_ids").eq("id", user.id).single(),
-                supabase.from("workouts").select("id, start_time, end_time, title, sets(weight_kg, reps, exercise_id, duration_s)").eq("user_id", user.id).order("start_time", { ascending: false }).limit(1000),
+                supabase.from("workouts").select("id, start_time, end_time, title, sets(weight_kg, reps, exercise_id, duration_s, distance_km)").eq("user_id", user.id).order("start_time", { ascending: false }).limit(1000),
                 supabase.from("exercises").select("id, name").eq("user_id", user.id),
                 supabase.from("workouts").select("id", { count: 'exact', head: true }).eq("user_id", user.id)
             ]);
@@ -466,15 +527,39 @@ export default function Dashboard() {
                 });
 
                 if (workoutsWithSets) {
-                    setActivityWorkouts(workoutsWithSets.map((workout: any) => ({
+                    const runKeywords = ["run", "jog", "treadmill", "corrida", "correr", "carrera", "passadeira", "laufen", "corsa"];
+                    const runExerciseIds = new Set(
+                        exercisesRes.data!
+                            .filter((ex) => runKeywords.some((k) => ex.name.toLowerCase().includes(k)))
+                            .map((ex) => ex.id)
+                    );
+                    const treadmillIds = new Set(
+                        exercisesRes.data!
+                            .filter((ex) => ["treadmill", "passadeira", "cinta"].some((k) => ex.name.toLowerCase().includes(k)))
+                            .map((ex) => ex.id)
+                    );
+                    setActivityWorkouts(workoutsWithSets.map((workout: any) => {
+                        // Treadmill sets at 0 km (e.g. walking warm-ups) don't count as running.
+                        const sets = (workout.sets || []).filter(
+                            (set: any) => !(treadmillIds.has(set.exercise_id) && !(Number(set.distance_km) > 0))
+                        );
+                        const runSets = sets.filter((set: any) => runExerciseIds.has(set.exercise_id));
+                        return {
                         id: workout.id,
                         start_time: workout.start_time,
+                        title: workout.title,
+                        runKm: runSets.reduce((t: number, s: any) => t + (Number(s.distance_km) || 0), 0),
+                        runSeconds: runSets.reduce((t: number, s: any) => t + (Number(s.duration_s) || 0), 0),
+                        isRun: (workout.sets || []).length > 0
+                            ? sets.length > 0 && sets.every((set: any) => runExerciseIds.has(set.exercise_id))
+                            : runKeywords.some((k) => (workout.title || "").toLowerCase().includes(k)),
                         volume: (workout.sets || []).reduce((total: number, set: any) =>
                             total + (Number(set.weight_kg) || 0) * (Number(set.reps) || 0), 0),
                         durationMinutes: workout.end_time
                             ? Math.max(0, (new Date(workout.end_time).getTime() - new Date(workout.start_time).getTime()) / 60000)
                             : 0,
-                    })));
+                        };
+                    }));
                     workoutsWithSets.forEach(w => {
                         const workoutDate = new Date(w.start_time);
                         const isThisWeek = workoutDate >= startOfWeek;
@@ -545,13 +630,6 @@ export default function Dashboard() {
     }
 
     const NAV_ITEMS = [
-        {
-            title: t("app.dashboard.modules.suggestions.title"),
-            desc: t("app.dashboard.modules.suggestions.desc"),
-            route: "/app/suggestions",
-            icon: "sparkles" as const,
-            color: "#34C759",
-        },
         {
             title: t("app.dashboard.modules.analytics.title"),
             desc: t("app.dashboard.modules.analytics.desc"),
@@ -954,7 +1032,7 @@ const styles = StyleSheet.create({
     activityDayLabels: {
         position: "relative",
         width: 28,
-        height: 116,
+        height: 131,
         marginRight: 8,
     },
     activityMonthSpacer: {
@@ -1028,7 +1106,7 @@ const styles = StyleSheet.create({
     activityWeek: {
         position: "relative",
         width: 13,
-        height: 116,
+        height: 131,
     },
     activityCells: {
         gap: 4,
@@ -1047,6 +1125,11 @@ const styles = StyleSheet.create({
         width: 13,
         height: 13,
         borderRadius: 2,
+    },
+    /** Lifting day that also included a run. */
+    activityCellMixed: {
+        borderColor: "#A855F7",
+        borderWidth: 2,
     },
     activityCellSelected: {
         borderColor: "#FFFFFF",

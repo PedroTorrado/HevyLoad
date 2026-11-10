@@ -72,7 +72,7 @@ export default function CustomProgramScreen() {
         setError(null);
         try {
             await saveCustomProgram(draft, true);
-            router.replace("/app/suggestions");
+            router.replace("/app/dashboard");
         } catch (saveError) {
             console.error("Custom program save error:", saveError);
             setError("We could not save this program. Apply the Supabase migration and try again.");

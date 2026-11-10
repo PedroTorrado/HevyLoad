@@ -8,12 +8,13 @@ import {
     ScrollView,
     StyleSheet,
     Text,
+    TextInput,
     View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "../../lib/supabase";
 import { useThemeColor } from "../../lib/theme";
-import { TRAINING_PROGRAMS, TrainingExerciseTarget, TrainingProgram } from "../../lib/training-program";
+import { TrainingExerciseTarget, TrainingProgram } from "../../lib/training-program";
 import { CustomProgram, getProgramWeeks, loadActiveCustomProgram } from "../../lib/custom-programs";
 import { Adjustment, ProgramStatus, syncProgramProgress } from "../../lib/program-progress";
 import {
@@ -21,6 +22,7 @@ import {
     ExerciseEvidence,
     getBestRecentEvidence,
     matchesTrainingTarget,
+    roundLoad,
     suggestedLoadFromEvidence,
     TrainingPerformance,
 } from "../../lib/training-recommendations";
@@ -40,7 +42,6 @@ export default function Suggestions() {
     const { t } = useTranslation();
     const insets = useSafeAreaInsets();
     const colors = useThemeColor();
-    const [programIndex, setProgramIndex] = useState(0);
     const [sessionIndex, setSessionIndex] = useState(0);
     const [exercises, setExercises] = useState<Exercise[]>([]);
     const [performances, setPerformances] = useState<TrainingPerformance[]>([]);
@@ -48,6 +49,8 @@ export default function Suggestions() {
     const [error, setError] = useState<string | null>(null);
     const [customProgram, setCustomProgram] = useState<CustomProgram | null>(null);
     const [status, setStatus] = useState<ProgramStatus | null>(null);
+    const [editing, setEditing] = useState(false);
+    const [edits, setEdits] = useState<Record<string, { exerciseId: string; load: string; sets: string; reps: string }>>({});
 
     useEffect(() => {
         (async () => {
@@ -122,7 +125,7 @@ export default function Suggestions() {
     }, []);
 
     const programs = useMemo<(TrainingProgram & { loadPercents?: Record<string, number>; adjustments?: Record<string, Adjustment[]> })[]>(() => {
-        if (!customProgram) return TRAINING_PROGRAMS;
+        if (!customProgram) return [];
         const weeks = getProgramWeeks(customProgram);
         const week = weeks[(status?.position.week ?? 1) - 1] ?? weeks[0];
         const loadPercents: Record<string, number> = {};
@@ -150,12 +153,13 @@ export default function Suggestions() {
             loadPercents,
             adjustments,
         };
-        return [custom, ...TRAINING_PROGRAMS];
+        return [custom];
     }, [customProgram, status]);
 
-    const selectedProgram = programs[Math.min(programIndex, programs.length - 1)];
-    const selectedSession = selectedProgram.sessions[sessionIndex % selectedProgram.sessions.length];
+    const selectedProgram = programs[0];
+    const selectedSession = selectedProgram?.sessions[sessionIndex % selectedProgram.sessions.length];
     const suggestions = useMemo(() => {
+        if (!selectedProgram || !selectedSession) return [];
         const evidenceWindow = createEvidenceWindow();
         const historicalWindow = createEvidenceWindow(3650);
         const getEvidence = (exerciseId: string) =>
@@ -169,23 +173,60 @@ export default function Suggestions() {
                 const bEvidence = getEvidence(b.id);
                 return (bEvidence?.recencyScore ?? 0) - (aEvidence?.recencyScore ?? 0);
             });
-            const exercise = rankedCandidates[0];
+            const selectedExercise = edits[target.key]?.exerciseId
+                ? exercises.find((item) => item.id === edits[target.key].exerciseId)
+                : undefined;
+            const exercise = selectedExercise ?? rankedCandidates[0];
             if (exercise) usedExerciseIds.add(exercise.id);
             const evidence = exercise ? getEvidence(exercise.id) : null;
-            const percent = selectedProgram.loadPercents?.[target.key];
-            const load = suggestedLoadFromEvidence(evidence, percent ? percent / 100 : 0.7);
-            return { target, exercise, load, evidence };
+            const percent = customProgram?.goal === "strength" && (target.movementPattern || target.group === "Deadlift")
+                ? 85
+                : selectedProgram.loadPercents?.[target.key];
+            const load = percent
+                ? suggestedLoadFromEvidence(evidence, percent / 100)
+                : evidence
+                    ? roundLoad(evidence.performance.weight_kg)
+                    : null;
+            const edit = edits[target.key];
+            return {
+                target: edit
+                    ? { ...target, sets: Number(edit.sets) || target.sets, reps: edit.reps || target.reps }
+                    : target,
+                exercise,
+                candidates,
+                load: edit ? (Number(edit.load) || null) : load,
+                evidence,
+            };
         }).filter((suggestion): suggestion is {
             target: TrainingExerciseTarget;
             exercise: Exercise;
             load: number | null;
             evidence: ExerciseEvidence | null;
+            candidates: Exercise[];
         } => Boolean(suggestion.exercise));
-    }, [exercises, performances, selectedSession, selectedProgram]);
-    const sessionAdjustments = selectedProgram.adjustments ?? {};
-    const globalNotes = programIndex === 0 && status ? status.adjustments.filter((a) => a.targetKey === null) : [];
+    }, [customProgram, edits, exercises, performances, selectedSession, selectedProgram]);
+    const sessionAdjustments = selectedProgram?.adjustments ?? {};
+    const globalNotes = status ? status.adjustments.filter((a) => a.targetKey === null) : [];
     const matchedCount = suggestions.length;
-    const totalExercises = selectedSession.exercises.length;
+    const totalExercises = selectedSession?.exercises.length ?? 0;
+
+    function beginEditing() {
+        const next: typeof edits = {};
+        suggestions.forEach(({ target, exercise, load }) => {
+            next[target.key] = {
+                exerciseId: exercise.id,
+                load: load == null ? "" : String(load),
+                sets: String(target.sets),
+                reps: target.reps,
+            };
+        });
+        setEdits(next);
+        setEditing(true);
+    }
+
+    function updateEdit(key: string, field: "exerciseId" | "load" | "sets" | "reps", value: string) {
+        setEdits((current) => ({ ...current, [key]: { ...current[key], [field]: value } }));
+    }
 
     return (
         <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -201,7 +242,6 @@ export default function Suggestions() {
                     </View>
                 </View>
 
-                <Text style={[styles.sectionLabel, { color: colors.secondaryText }]}>Choose your program</Text>
                 <Pressable
                     onPress={() => router.push("/app/custom-program")}
                     style={[styles.customProgramButton, { backgroundColor: colors.tint, borderColor: colors.tint }]}
@@ -234,37 +274,8 @@ export default function Suggestions() {
                         </Pressable>
                     </View>
                 )}
-                <View style={styles.programList}>
-                    {programs.map((item, index) => {
-                        const isSelected = index === programIndex;
-                        return (
-                            <Pressable
-                                key={item.key}
-                                onPress={() => {
-                                    setProgramIndex(index);
-                                    setSessionIndex(0);
-                                }}
-                                style={[
-                                    styles.programCard,
-                                    {
-                                        backgroundColor: isSelected ? colors.tint : colors.card,
-                                        borderColor: isSelected ? colors.tint : colors.border,
-                                    },
-                                ]}
-                            >
-                                <View style={styles.programCardTop}>
-                                    <View style={[styles.splitKey, { backgroundColor: isSelected ? "rgba(255,255,255,0.2)" : colors.secondary }]}>
-                                        <Ionicons name={index === 0 ? "flame-outline" : index === 1 ? "grid-outline" : "calendar-outline"} size={15} color={isSelected ? "#FFF" : colors.tint} />
-                                    </View>
-                                    <Ionicons name={isSelected ? "checkmark-circle" : "ellipse-outline"} size={20} color={isSelected ? "#FFF" : colors.secondaryText} />
-                                </View>
-                                <Text style={[styles.splitName, { color: isSelected ? "#FFF" : colors.text }]}>{item.title}</Text>
-                                <Text style={[styles.programPurpose, { color: isSelected ? "rgba(255,255,255,0.85)" : colors.tint }]}>{item.purpose}</Text>
-                                <Text style={[styles.splitDescription, { color: isSelected ? "rgba(255,255,255,0.8)" : colors.secondaryText }]}>{item.frequency}</Text>
-                            </Pressable>
-                        );
-                    })}
-                </View>
+                {selectedProgram && selectedSession ? (
+                    <>
                 <Text style={[styles.programDescription, { color: colors.secondaryText }]}>{selectedProgram.description}</Text>
 
                 <Text style={[styles.sectionLabel, { color: colors.secondaryText }]}>Choose a session</Text>
@@ -308,6 +319,15 @@ export default function Suggestions() {
                         </View>
                     </View>
                 </View>
+                    </>
+                ) : (
+                    <View style={[styles.emptyCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                        <Text style={[styles.emptyTitle, { color: colors.text }]}>Create a plan to get started</Text>
+                        <Text style={[styles.emptyText, { color: colors.secondaryText }]}>
+                            Your recommendations will follow the sessions you create and update from your completed workouts.
+                        </Text>
+                    </View>
+                )}
 
                 {loading ? (
                     <ActivityIndicator style={styles.loader} color={colors.tint} />
@@ -319,7 +339,7 @@ export default function Suggestions() {
                 ) : suggestions.length > 0 ? (
                     <>
                                 <View style={styles.workoutHeading}>
-                            <View>
+                            <View style={styles.workoutHeadingCopy}>
                                 <Text style={[styles.workoutTitle, { color: colors.text }]}>Workout plan</Text>
                                 <Text style={[styles.workoutSubtitle, { color: colors.secondaryText }]}>
                                     {matchedCount} of {totalExercises} movements matched to your history
@@ -329,6 +349,13 @@ export default function Suggestions() {
                                         <Ionicons name="sparkles-outline" size={13} color={colors.tint} />
                                         <Text style={[styles.matchBadgeText, { color: colors.tint }]}>Personalized</Text>
                                     </View>
+                                    <Pressable
+                                        onPress={() => editing ? setEditing(false) : beginEditing()}
+                                        style={[styles.editButton, { borderColor: colors.border }]}
+                                    >
+                                        <Ionicons name={editing ? "checkmark-outline" : "create-outline"} size={15} color={colors.tint} />
+                                        <Text style={[styles.editButtonText, { color: colors.tint }]}>{editing ? "Done" : "Edit workout"}</Text>
+                                    </Pressable>
                                 </View>
                                 {suggestions.map((suggestion, index) => (
                                     <View
@@ -347,9 +374,41 @@ export default function Suggestions() {
                                         </View>
                                         <View style={styles.suggestionCopy}>
                                             <Text style={[styles.groupName, { color: colors.secondaryText }]}>{suggestion.target.group.toUpperCase()}</Text>
-                                    <Text style={[styles.exerciseName, { color: colors.text }]}>
-                                        {suggestion.exercise?.name ?? t("app.suggestions.add_exercise")}
-                                    </Text>
+                                    <Pressable
+                                        disabled={!editing}
+                                        onPress={() => updateEdit(suggestion.target.key, "exerciseId", suggestion.exercise.id)}
+                                        style={styles.exerciseNameButton}
+                                    >
+                                        <Text style={[styles.exerciseName, { color: colors.text }]}>{suggestion.exercise.name}</Text>
+                                        {editing && <Ionicons name="chevron-down" size={15} color={colors.tint} />}
+                                    </Pressable>
+                                    {editing && (
+                                        <View style={styles.exercisePicker}>
+                                            <Text style={[styles.pickerLabel, { color: colors.secondaryText }]}>Replace exercise</Text>
+                                            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.exercisePickerRow}>
+                                                {suggestion.candidates.map((candidate) => {
+                                                    const selected = candidate.id === suggestion.exercise.id;
+                                                    return (
+                                                        <Pressable
+                                                            key={candidate.id}
+                                                            onPress={() => updateEdit(suggestion.target.key, "exerciseId", candidate.id)}
+                                                            style={[
+                                                                styles.exerciseChoice,
+                                                                {
+                                                                    backgroundColor: selected ? colors.tint : colors.background,
+                                                                    borderColor: selected ? colors.tint : colors.border,
+                                                                },
+                                                            ]}
+                                                        >
+                                                            <Text style={[styles.exerciseChoiceText, { color: selected ? "#FFF" : colors.text }]}>
+                                                                {candidate.name}
+                                                            </Text>
+                                                        </Pressable>
+                                                    );
+                                                })}
+                                            </ScrollView>
+                                        </View>
+                                    )}
                                     <Text style={[styles.evidenceText, { color: colors.secondaryText }]}>
                                         {suggestion.evidence
                                             ? t("app.suggestions.evidence", { date: new Date(suggestion.evidence.performance.start_time).toLocaleDateString() })
@@ -362,11 +421,38 @@ export default function Suggestions() {
                                     ))}
                                 </View>
                                 <View style={[styles.prescription, { backgroundColor: suggestion.load ? colors.tint : colors.secondary }]}>
-                                    <Text style={[styles.loadText, { color: suggestion.load ? "#FFF" : colors.secondaryText }]}>
-                                        {suggestion.load ? `${suggestion.load}` : "—"}
-                                    </Text>
+                                    {editing ? (
+                                        <TextInput
+                                            value={edits[suggestion.target.key]?.load ?? ""}
+                                            onChangeText={(value) => updateEdit(suggestion.target.key, "load", value.replace(/[^0-9.]/g, ""))}
+                                            keyboardType="decimal-pad"
+                                            style={[styles.editInput, { color: "#FFF" }]}
+                                            selectTextOnFocus
+                                        />
+                                    ) : (
+                                        <Text style={[styles.loadText, { color: suggestion.load ? "#FFF" : colors.secondaryText }]}>
+                                            {suggestion.load ? `${suggestion.load}` : "—"}
+                                        </Text>
+                                    )}
                                     <Text style={[styles.loadUnit, { color: suggestion.load ? "rgba(255,255,255,0.8)" : colors.secondaryText }]}>kg</Text>
-                                    <Text style={[styles.repsText, { color: suggestion.load ? "rgba(255,255,255,0.8)" : colors.secondaryText }]}>{suggestion.target.sets} × {suggestion.target.reps}</Text>
+                                    {editing ? (
+                                        <View style={styles.editPrescriptionRow}>
+                                            <TextInput
+                                                value={edits[suggestion.target.key]?.sets ?? ""}
+                                                onChangeText={(value) => updateEdit(suggestion.target.key, "sets", value.replace(/\D/g, ""))}
+                                                keyboardType="number-pad"
+                                                style={[styles.smallEditInput, { color: "#FFF" }]}
+                                            />
+                                            <Text style={[styles.repsText, { color: "rgba(255,255,255,0.8)" }]}>×</Text>
+                                            <TextInput
+                                                value={edits[suggestion.target.key]?.reps ?? ""}
+                                                onChangeText={(value) => updateEdit(suggestion.target.key, "reps", value)}
+                                                style={[styles.smallEditInput, { color: "#FFF" }]}
+                                            />
+                                        </View>
+                                    ) : (
+                                        <Text style={[styles.repsText, { color: suggestion.load ? "rgba(255,255,255,0.8)" : colors.secondaryText }]}>{suggestion.target.sets} × {suggestion.target.reps}</Text>
+                                    )}
                                 </View>
                             </View>
                         ))}
@@ -425,22 +511,34 @@ const styles = StyleSheet.create({
     metaItem: { flexDirection: "row", alignItems: "center", gap: 5 },
     metaText: { fontSize: 11, fontWeight: "700" },
     loader: { marginTop: 48 },
-    workoutHeading: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 },
+    workoutHeading: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 12 },
+    workoutHeadingCopy: { flex: 1, minWidth: 180 },
+    editButton: { flexDirection: "row", alignItems: "center", gap: 5, borderWidth: 1, borderRadius: 9, paddingHorizontal: 9, paddingVertical: 7 },
+    editButtonText: { fontSize: 11, fontWeight: "800" },
     workoutTitle: { fontSize: 20, fontWeight: "900" },
     workoutSubtitle: { fontSize: 12, marginTop: 3 },
     matchBadge: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 6, borderRadius: 12 },
     matchBadgeText: { fontSize: 10, fontWeight: "800" },
-    suggestionCard: { flexDirection: "row", alignItems: "center", padding: 14, borderRadius: 14, borderWidth: 1, borderLeftWidth: 4, marginBottom: 10 },
+    suggestionCard: { flexDirection: "row", alignItems: "flex-start", padding: 14, borderRadius: 14, borderWidth: 1, borderLeftWidth: 4, marginBottom: 10 },
     stepNumber: { width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center", marginRight: 14 },
     stepNumberText: { fontSize: 13, fontWeight: "900" },
-    suggestionCopy: { flex: 1 },
+    suggestionCopy: { flex: 1, minWidth: 0, overflow: "hidden" },
     groupName: { fontSize: 10, fontWeight: "800", letterSpacing: 1.2, marginBottom: 4 },
+    exerciseNameButton: { flexDirection: "row", alignItems: "center", gap: 6 },
     exerciseName: { fontSize: 17, fontWeight: "800" },
+    exercisePicker: { marginTop: 10 },
+    pickerLabel: { fontSize: 10, fontWeight: "800", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 6 },
+    exercisePickerRow: { gap: 6, paddingRight: 8, maxWidth: "100%" },
+    exerciseChoice: { maxWidth: 180, borderWidth: 1, borderRadius: 9, paddingHorizontal: 9, paddingVertical: 7 },
+    exerciseChoiceText: { fontSize: 11, fontWeight: "700" },
     loadText: { fontSize: 16, fontWeight: "900" },
+    editInput: { minWidth: 62, paddingVertical: 0, fontSize: 16, fontWeight: "900", textAlign: "right" },
     loadUnit: { fontSize: 9, fontWeight: "800", marginTop: -2 },
     repsText: { fontSize: 10, fontWeight: "700", marginTop: 3 },
+    editPrescriptionRow: { flexDirection: "row", alignItems: "center", gap: 3 },
+    smallEditInput: { width: 28, paddingVertical: 0, fontSize: 10, fontWeight: "800", textAlign: "center", borderBottomWidth: 1, borderBottomColor: "rgba(255,255,255,0.65)" },
     evidenceText: { fontSize: 11, marginTop: 5 },
-    prescription: { minWidth: 68, alignItems: "center", paddingHorizontal: 7, paddingVertical: 8, borderRadius: 10, marginLeft: 8 },
+    prescription: { width: 88, flexShrink: 0, alignItems: "center", paddingHorizontal: 8, paddingVertical: 9, borderRadius: 10, marginLeft: 12 },
     emptyCard: { padding: 22, borderRadius: 14, borderWidth: 1, marginTop: 18 },
     emptyTitle: { fontSize: 17, fontWeight: "800", marginBottom: 6 },
     emptyText: { fontSize: 14, lineHeight: 21 },

@@ -59,6 +59,19 @@ export interface SessionLog {
     start_time?: string;
 }
 
+interface SessionLogRow {
+    workout_id: string;
+    week_index: number;
+    session_key: string;
+    phase: WeekPhase;
+    counted: boolean;
+    muscle_coverage: number;
+    avg_rpe_delta: number | null;
+    volume_ratio: number;
+    adjustments: Adjustment[];
+    created_at?: string;
+}
+
 export interface ProgramPosition {
     week: number;
     phase: WeekPhase;
@@ -95,6 +108,21 @@ export const PROGRESS_TUNABLES = { COUNTED_COVERAGE_MIN, FATIGUE_HALF_LIFE_HOURS
 const isWorkingSet = (s: LoggedSet) => (s.set_type ?? "normal").toLowerCase() !== "warmup" && s.reps > 0;
 const norm = (muscle: string | null | undefined) => (muscle ?? "other").trim().toLowerCase();
 const hoursBetween = (a: Date, b: Date) => Math.max(0, (b.getTime() - a.getTime()) / 3_600_000);
+
+function fromSessionLogRow(row: SessionLogRow): SessionLog {
+    return {
+        workout_id: row.workout_id,
+        week_index: row.week_index,
+        session_key: row.session_key,
+        phase: row.phase,
+        counted: row.counted,
+        muscle_coverage: Number(row.muscle_coverage),
+        avg_rpe_delta: row.avg_rpe_delta == null ? null : Number(row.avg_rpe_delta),
+        volume_ratio: Number(row.volume_ratio),
+        adjustments: Array.isArray(row.adjustments) ? row.adjustments : [],
+        created_at: row.created_at,
+    };
+}
 
 // ---------- Effort estimation ----------
 
@@ -392,7 +420,7 @@ export async function syncProgramProgress(program: CustomProgram, now = new Date
 
     const exercises = new Map((exerciseRows ?? []).map((e) => [e.id, e as ExerciseInfo]));
     const e1rm = buildE1rmIndex(history);
-    const logs: SessionLog[] = (logRows ?? []) as SessionLog[];
+    const logs: SessionLog[] = (logRows ?? []).map((row) => fromSessionLogRow(row as SessionLogRow));
     const logged = new Set(logs.map((l) => l.workout_id));
     let lastMatch: ReturnType<typeof matchWorkoutToSession> | undefined;
 
@@ -414,8 +442,22 @@ export async function syncProgramProgress(program: CustomProgram, now = new Date
             volume_ratio: Number(match.volumeRatio.toFixed(3)),
             adjustments: computeAdaptations(pos.session, pos.phase, logs, priorRecovery, lastMatch),
         };
-        const { error } = await supabase.from("program_session_logs").insert({ ...log, user_id: user.id, program_id: program.id });
+        const { error } = await supabase.from("program_session_logs").insert({
+            user_id: user.id,
+            program_id: program.id,
+            workout_id: log.workout_id,
+            week_index: log.week_index,
+            session_key: log.session_key,
+            phase: log.phase,
+            counted: log.counted,
+            muscle_coverage: log.muscle_coverage,
+            avg_rpe_delta: log.avg_rpe_delta,
+            volume_ratio: log.volume_ratio,
+            adjustments: log.adjustments,
+        });
         if (error && error.code !== "23505") throw error; // ignore duplicate from concurrent sync
+        // A duplicate means another sync already persisted this workout; keep it in
+        // the in-memory sequence so the position returned by this sync is current.
         logs.push(log);
         if (counted) lastMatch = match;
     }
