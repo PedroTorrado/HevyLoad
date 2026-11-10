@@ -4,11 +4,12 @@
   "version": "1.0.0",
   "scripts": {
     "start": "expo start",
-    "reset-project": "node ./scripts/reset-project.js",
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "lint": "expo lint"
+    "lint": "eslint app lib",
+    "typecheck": "tsc --noEmit",
+    "build:web": "expo export --platform web"
   },
   "dependencies": {
     "@expo-google-fonts/alata": "^0.4.1",
@@ -22,6 +23,7 @@
     "date-fns": "^4.1.0",
     "dotenv": "^17.3.1",
     "expo": "~54.0.33",
+    "expo-clipboard": "~8.0.8",
     "expo-constants": "~18.0.13",
     "expo-document-picker": "^55.0.13",
     "expo-file-system": "^55.0.17",

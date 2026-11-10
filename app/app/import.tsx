@@ -20,15 +20,34 @@ import { parse } from "date-fns";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system";
 
+type StatusType = "success" | "error" | "info";
+type Status = { type: StatusType; title: string; message: string; action?: { label: string; onPress: () => void } };
+
+type PressState = { pressed: boolean; hovered?: boolean };
+const pressFeedback = ({ pressed, hovered }: PressState) => ({
+    opacity: pressed ? 0.75 : hovered ? 0.9 : 1,
+    transform: [{ scale: pressed ? 0.98 : 1 }],
+});
+
 export default function Import() {
     const router = useRouter();
     const { t } = useTranslation();
     const insets = useSafeAreaInsets();
     const colors = useThemeColor();
+    const translate = (key: string, opts?: Record<string, unknown>): string =>
+        String(t(key, opts as any));
+    const k = (key: string, opts?: Record<string, unknown>) =>
+        translate(`app.dashboard.import.${key}`, opts);
 
     const [loading, setLoading] = useState(false);
     const [importText, setImportText] = useState("");
     const [progress, setProgress] = useState("");
+    const [fileName, setFileName] = useState<string | null>(null);
+    // Inline status replaces Alert.alert, which is a no-op on react-native-web
+    const [status, setStatus] = useState<Status | null>(null);
+
+    const lineCount = importText.trim() ? importText.trim().split(/\r?\n/).filter(l => l.trim()).length : 0;
+    const rowCount = Math.max(0, lineCount - 1);
 
     async function pickFile() {
         try {
@@ -69,17 +88,25 @@ export default function Import() {
             
             if (content) {
                 setImportText(content);
-                Alert.alert(t("app.import.file_loaded"), t("app.import.file_loaded_message", { name: asset.name }));
+                setFileName(asset.name);
+                setStatus({ type: "info", title: k("file_loaded"), message: k("file_loaded_message", { name: asset.name }) });
             } else {
-                Alert.alert(t("app.import.error"), t("app.import.empty_file"));
+                setStatus({ type: "error", title: k("error"), message: k("empty_file") });
             }
         } catch (error: any) {
             console.error("File pick error:", error);
-            Alert.alert(
-                "Error", 
-                `Could not read the selected file.\n\nDetails: ${error.message || "Unknown error"}`
-            );
+            setStatus({
+                type: "error",
+                title: k("error"),
+                message: `${k("read_error")} ${error.message || ""}`.trim(),
+            });
         }
+    }
+
+    function clearFile() {
+        setImportText("");
+        setFileName(null);
+        setStatus(null);
     }
 
     // Robust CSV parser that handles quoted values (crucial for dates with commas)
@@ -114,10 +141,11 @@ export default function Import() {
 
     async function handleImport() {
         if (!importText.trim()) {
-            Alert.alert(t("app.import.error"), t("app.import.empty_data"));
+            setStatus({ type: "error", title: k("error"), message: k("empty_data") });
             return;
         }
 
+        setStatus(null);
         setLoading(true);
         setProgress("Parsing data...");
 
@@ -278,7 +306,7 @@ export default function Import() {
             if (newWorkouts.length === 0) {
                 setLoading(false);
                 setProgress("");
-                Alert.alert("Info", "All workouts in this file have already been imported.");
+                setStatus({ type: "info", title: k("nothing_new"), message: k("already_imported") });
                 return;
             }
 
@@ -321,13 +349,18 @@ export default function Import() {
                 }));
             }
 
-            Alert.alert("Success", "Data imported successfully!", [
-                { text: "OK", onPress: () => router.replace("/app/dashboard") }
-            ]);
+            setImportText("");
+            setFileName(null);
+            setStatus({
+                type: "success",
+                title: k("success"),
+                message: k("import_success_count", { count: newWorkouts.length }),
+                action: { label: k("view_dashboard"), onPress: () => router.replace("/app/dashboard") },
+            });
 
         } catch (error: any) {
             console.error("Import error:", error);
-            Alert.alert("Import Failed", error.message || "An error occurred during import.");
+            setStatus({ type: "error", title: k("import_failed"), message: error.message || k("import_failed") });
         } finally {
             setLoading(false);
             setProgress("");
@@ -358,17 +391,10 @@ export default function Import() {
             if (exError) throw exError;
 
             setImportText("");
-            if (Platform.OS === "web") {
-                window.alert("All data has been cleared.");
-            } else {
-                Alert.alert("Success", "All data has been cleared.");
-            }
+            setFileName(null);
+            setStatus({ type: "success", title: k("success"), message: k("clear_success") });
         } catch (error: any) {
-            if (Platform.OS === "web") {
-                window.alert(error.message || "Failed to clear data.");
-            } else {
-                Alert.alert("Error", error.message || "Failed to clear data.");
-            }
+            setStatus({ type: "error", title: k("error"), message: error.message || k("clear_failed") });
         } finally {
             setLoading(false);
             setProgress("");
@@ -376,8 +402,8 @@ export default function Import() {
     }
 
     async function clearAllData() {
-        const title = "Delete All Data";
-        const message = "Are you sure? This will permanently erase all your workouts, sets, and exercise history. This cannot be undone.";
+        const title = k("danger_title");
+        const message = k("danger_confirm");
 
         if (Platform.OS === "web") {
             const confirmed = window.confirm(`${title}\n\n${message}`);
@@ -391,9 +417,9 @@ export default function Import() {
             title,
             message,
             [
-                { text: "Cancel", style: "cancel" },
+                { text: translate("common.cancel"), style: "cancel" },
                 { 
-                    text: "Delete Everything", 
+                    text: k("delete_everything"), 
                     style: "destructive",
                     onPress: performDeletion
                 }
@@ -421,7 +447,7 @@ export default function Import() {
 
             const d3 = parse(cleanStr, "d MMM yyyy, HH:mm", new Date());
             if (!isNaN(d3.getTime())) return d3;
-        } catch (e) {
+        } catch {
             // Fall through to native Date
         }
 
@@ -447,36 +473,92 @@ export default function Import() {
         }
     };
 
+    const statusColor = status
+        ? status.type === "success" ? colors.success : status.type === "error" ? colors.error : colors.tint
+        : colors.tint;
+    const statusIcon = status?.type === "success" ? "checkmark-circle" : status?.type === "error" ? "alert-circle" : "information-circle";
+    const canImport = !!importText.trim() && !loading;
+
     return (
         <View style={[styles.container, { backgroundColor: colors.background }]}>
             {/* Header */}
             <View style={[styles.header, { paddingTop: insets.top + 10, borderBottomColor: colors.border }]}>
-                <Pressable onPress={handleBack} style={styles.backBtn}>
+                <Pressable onPress={handleBack} style={styles.backBtn} accessibilityLabel={translate("common.back")}>
                     <Ionicons name="chevron-back" size={28} color={colors.text} />
                 </Pressable>
-                <Text style={[styles.headerTitle, { color: colors.text }]}>{t("app.import.title")}</Text>
-                <View style={{ width: 40 }} />
+                <View style={styles.headerInfo}>
+                    <Text style={[styles.headerTitle, { color: colors.text }]} numberOfLines={1}>{k("title")}</Text>
+                    <Text style={[styles.headerSubtitle, { color: colors.secondaryText }]} numberOfLines={1}>{k("subtitle")}</Text>
+                </View>
+                <View style={styles.backBtn} />
             </View>
 
-            <ScrollView contentContainerStyle={styles.content}>
-                <Text style={[styles.instruction, { color: colors.secondaryText }]}>
-                    Select your Hevy export file from your device or paste the content below.
-                </Text>
+            <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]} keyboardShouldPersistTaps="handled">
+                {/* How-to */}
+                <Text style={[styles.sectionTitle, { color: colors.accentText }]}>{k("how_title")}</Text>
+                <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                    {[k("step_1"), k("step_2"), k("step_3")].map((step, i) => (
+                        <View key={i} style={[styles.stepRow, i > 0 && { marginTop: 12 }]}>
+                            <View style={[styles.stepNum, { backgroundColor: colors.tint + "1F" }]}>
+                                <Text style={[styles.stepNumText, { color: colors.tint }]}>{i + 1}</Text>
+                            </View>
+                            <Text style={[styles.stepText, { color: colors.text }]}>{step}</Text>
+                        </View>
+                    ))}
+                </View>
 
-                <Pressable 
-                    style={[styles.fileBtn, { borderColor: colors.tint }]} 
-                    onPress={pickFile}
-                >
-                    <Ionicons name="document-text-outline" size={24} color={colors.tint} />
-                    <Text style={[styles.fileBtnText, { color: colors.tint }]}>{t("app.import.select_file")}</Text>
-                </Pressable>
+                {/* File picker */}
+                <Text style={[styles.sectionTitle, { color: colors.accentText }]}>{k("file_section")}</Text>
+                {fileName ? (
+                    <View style={[styles.fileChip, { backgroundColor: colors.tint + "12", borderColor: colors.tint + "40" }]}>
+                        <View style={[styles.fileIcon, { backgroundColor: colors.tint }]}>
+                            <Ionicons name="document-text" size={20} color="#FFF" />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                            <Text style={[styles.fileName, { color: colors.text }]} numberOfLines={1}>{fileName}</Text>
+                            <Text style={[styles.fileMeta, { color: colors.secondaryText }]}>{k("file_rows", { count: rowCount })}</Text>
+                        </View>
+                        <Pressable onPress={pickFile} disabled={loading} hitSlop={6} style={(s) => [styles.chipBtn, pressFeedback(s)]}>
+                            <Text style={[styles.chipBtnText, { color: colors.tint }]}>{k("change")}</Text>
+                        </Pressable>
+                        <Pressable onPress={clearFile} disabled={loading} hitSlop={6} style={(s) => [styles.chipClose, pressFeedback(s)]} accessibilityLabel={k("remove_file")}>
+                            <Ionicons name="close" size={18} color={colors.secondaryText} />
+                        </Pressable>
+                    </View>
+                ) : (
+                    <Pressable
+                        onPress={pickFile}
+                        disabled={loading}
+                        style={({ pressed, hovered }: PressState) => [
+                            styles.dropZone,
+                            {
+                                borderColor: hovered || pressed ? colors.tint : colors.tint + "60",
+                                backgroundColor: hovered || pressed ? colors.tint + "14" : colors.tint + "08",
+                            },
+                            pressFeedback({ pressed, hovered: false }),
+                        ]}
+                    >
+                        <View style={[styles.dropIcon, { backgroundColor: colors.tint + "1F" }]}>
+                            <Ionicons name="cloud-upload" size={26} color={colors.tint} />
+                        </View>
+                        <Text style={[styles.dropTitle, { color: colors.text }]}>{k("select_file")}</Text>
+                        <Text style={[styles.dropHint, { color: colors.secondaryText }]}>{k("file_hint")}</Text>
+                    </Pressable>
+                )}
 
                 <View style={styles.divider}>
                     <View style={[styles.line, { backgroundColor: colors.border }]} />
-                    <Text style={[styles.orText, { color: colors.secondaryText }]}>{t("app.import.or")}</Text>
+                    <Text style={[styles.orText, { color: colors.secondaryText }]}>{k("or")}</Text>
                     <View style={[styles.line, { backgroundColor: colors.border }]} />
                 </View>
 
+                {/* Paste */}
+                <View style={styles.pasteHeader}>
+                    <Text style={[styles.sectionTitle, { color: colors.accentText, marginBottom: 0, marginTop: 0 }]}>{k("paste_label")}</Text>
+                    {lineCount > 0 && (
+                        <Text style={[styles.lineCount, { color: colors.secondaryText }]}>{k("lines", { count: lineCount })}</Text>
+                    )}
+                </View>
                 <TextInput
                     multiline
                     style={[
@@ -487,35 +569,77 @@ export default function Import() {
                             borderColor: colors.border 
                         }
                     ]}
-                    placeholder={t("app.import.paste_placeholder")}
-                    placeholderTextColor={colors.accentText}
+                    placeholder={k("paste_placeholder")}
+                    placeholderTextColor={colors.secondaryText}
                     value={importText}
-                    onChangeText={setImportText}
+                    onChangeText={(text) => {
+                        setImportText(text);
+                        if (!text.trim()) setFileName(null);
+                    }}
                     autoCapitalize="none"
                     autoCorrect={false}
+                    editable={!loading}
                 />
 
+                {/* Status */}
+                {status && !loading && (
+                    <View style={[styles.statusBanner, { backgroundColor: statusColor + "14", borderColor: statusColor + "40" }]}>
+                        <Ionicons name={statusIcon} size={20} color={statusColor} />
+                        <View style={{ flex: 1 }}>
+                            <Text style={[styles.statusTitle, { color: statusColor }]}>{status.title}</Text>
+                            <Text style={[styles.statusMessage, { color: colors.text }]}>{status.message}</Text>
+                            {status.action && (
+                                <Pressable onPress={status.action.onPress} style={(s) => [styles.statusAction, { backgroundColor: statusColor }, pressFeedback(s)]}>
+                                    <Text style={styles.statusActionText}>{status.action.label}</Text>
+                                    <Ionicons name="arrow-forward" size={14} color="#FFF" />
+                                </Pressable>
+                            )}
+                        </View>
+                        <Pressable onPress={() => setStatus(null)} hitSlop={8} accessibilityLabel="Dismiss">
+                            <Ionicons name="close" size={16} color={colors.secondaryText} />
+                        </Pressable>
+                    </View>
+                )}
+
+                {/* Import action */}
                 {loading ? (
-                    <View style={styles.loadingContainer}>
-                        <ActivityIndicator size="large" color={colors.tint} />
-                        <Text style={[styles.progressText, { color: colors.secondaryText }]}>{progress}</Text>
+                    <View style={[styles.progressCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                        <ActivityIndicator size="small" color={colors.tint} />
+                        <Text style={[styles.progressText, { color: colors.text }]} numberOfLines={2}>{progress || k("importing")}</Text>
                     </View>
                 ) : (
-                    <Pressable 
-                        style={[styles.importBtn, { backgroundColor: colors.tint }]} 
+                    <Pressable
                         onPress={handleImport}
+                        disabled={!canImport}
+                        style={(s) => [
+                            styles.importBtn,
+                            { backgroundColor: canImport ? colors.tint : colors.secondary },
+                            canImport && pressFeedback(s),
+                        ]}
                     >
-                        <Text style={styles.importBtnText}>{t("app.import.import_data")}</Text>
+                        <Ionicons name="download-outline" size={18} color={canImport ? "#FFF" : colors.secondaryText} />
+                        <Text style={[styles.importBtnText, { color: canImport ? "#FFF" : colors.secondaryText }]}>
+                            {k("import_data")}{rowCount > 0 ? ` · ${rowCount}` : ""}
+                        </Text>
                     </Pressable>
                 )}
 
-                <Pressable 
-                    style={[styles.clearBtn, { marginTop: 40 }]} 
-                    onPress={clearAllData}
-                    disabled={loading}
-                >
-                    <Text style={[styles.clearBtnText, { color: colors.error }]}>{t("app.import.clear_all")}</Text>
-                </Pressable>
+                {/* Danger zone */}
+                <Text style={[styles.sectionTitle, { color: colors.error, marginTop: 40 }]}>{k("danger_title")}</Text>
+                <View style={[styles.card, styles.dangerCard, { backgroundColor: colors.error + "0A", borderColor: colors.error + "40" }]}>
+                    <View style={{ flex: 1 }}>
+                        <Text style={[styles.dangerTitle, { color: colors.text }]}>{k("clear_all")}</Text>
+                        <Text style={[styles.dangerDesc, { color: colors.secondaryText }]}>{k("danger_desc")}</Text>
+                    </View>
+                    <Pressable
+                        onPress={clearAllData}
+                        disabled={loading}
+                        style={(s) => [styles.dangerBtn, { borderColor: colors.error }, pressFeedback(s), loading && { opacity: 0.4 }]}
+                    >
+                        <Ionicons name="trash-outline" size={16} color={colors.error} />
+                        <Text style={[styles.dangerBtnText, { color: colors.error }]}>{translate("common.delete")}</Text>
+                    </Pressable>
+                </View>
             </ScrollView>
         </View>
     );
@@ -528,40 +652,70 @@ const styles = StyleSheet.create({
         alignItems: "center",
         justifyContent: "space-between",
         paddingHorizontal: 16,
-        paddingBottom: 10,
+        paddingBottom: 12,
         borderBottomWidth: 1,
     },
-    backBtn: { width: 40, height: 40, justifyContent: "center" },
-    headerTitle: { fontSize: 18, fontWeight: "700" },
+    backBtn: { width: 40, height: 40, justifyContent: "center", alignItems: "center" },
+    headerInfo: { flex: 1, alignItems: "center", paddingHorizontal: 8 },
+    headerTitle: { fontSize: 16, fontWeight: "800", fontFamily: "System" },
+    headerSubtitle: { fontSize: 12, fontWeight: "600", fontFamily: "System", marginTop: 1 },
 
-    content: { padding: 20 },
-    instruction: { fontSize: 14, marginBottom: 20, lineHeight: 20, textAlign: "center" },
-    
-    fileBtn: {
-        height: 60,
-        borderRadius: 12,
+    content: { padding: 16, width: "100%", maxWidth: 720, alignSelf: "center" },
+    sectionTitle: {
+        fontSize: 13,
+        fontWeight: "800",
+        textTransform: "uppercase",
+        letterSpacing: 1,
+        marginTop: 24,
+        marginBottom: 12,
+        fontFamily: "System",
+    },
+    card: { borderRadius: 16, borderWidth: 1, padding: 16 },
+
+    // How-to steps
+    stepRow: { flexDirection: "row", alignItems: "center", gap: 12 },
+    stepNum: { width: 26, height: 26, borderRadius: 8, justifyContent: "center", alignItems: "center" },
+    stepNumText: { fontSize: 12, fontWeight: "900", fontFamily: "System" },
+    stepText: { flex: 1, fontSize: 14, fontWeight: "600", lineHeight: 20, fontFamily: "System" },
+
+    // File picker
+    dropZone: {
+        borderRadius: 16,
         borderWidth: 2,
         borderStyle: "dashed",
+        paddingVertical: 28,
+        paddingHorizontal: 16,
+        alignItems: "center",
+    },
+    dropIcon: { width: 52, height: 52, borderRadius: 26, justifyContent: "center", alignItems: "center", marginBottom: 12 },
+    dropTitle: { fontSize: 16, fontWeight: "800", fontFamily: "System" },
+    dropHint: { fontSize: 12, fontWeight: "600", marginTop: 4, fontFamily: "System" },
+
+    fileChip: {
         flexDirection: "row",
-        justifyContent: "center",
         alignItems: "center",
         gap: 12,
-        marginBottom: 24,
+        padding: 12,
+        borderRadius: 16,
+        borderWidth: 1,
     },
-    fileBtnText: { fontSize: 16, fontWeight: "700" },
+    fileIcon: { width: 40, height: 40, borderRadius: 10, justifyContent: "center", alignItems: "center" },
+    fileName: { fontSize: 15, fontWeight: "800", fontFamily: "System" },
+    fileMeta: { fontSize: 12, fontWeight: "600", marginTop: 2, fontFamily: "System" },
+    chipBtn: { paddingHorizontal: 8, paddingVertical: 6 },
+    chipBtnText: { fontSize: 12, fontWeight: "800", fontFamily: "System" },
+    chipClose: { padding: 4 },
 
-    divider: {
-        flexDirection: "row",
-        alignItems: "center",
-        marginBottom: 24,
-        gap: 16,
-    },
+    divider: { flexDirection: "row", alignItems: "center", marginVertical: 24, gap: 16 },
     line: { flex: 1, height: 1 },
-    orText: { fontSize: 12, fontWeight: "800" },
+    orText: { fontSize: 11, fontWeight: "900", letterSpacing: 1, fontFamily: "System" },
 
+    // Paste
+    pasteHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12 },
+    lineCount: { fontSize: 11, fontWeight: "700", fontFamily: "System" },
     input: {
-        height: 300,
-        borderRadius: 12,
+        height: 220,
+        borderRadius: 16,
         borderWidth: 1,
         padding: 16,
         textAlignVertical: "top",
@@ -569,22 +723,64 @@ const styles = StyleSheet.create({
         fontFamily: Platform.OS === "ios" ? "Courier" : "monospace",
     },
 
-    loadingContainer: { marginTop: 24, alignItems: "center" },
-    progressText: { marginTop: 12, fontSize: 14, fontWeight: "600" },
+    // Status
+    statusBanner: {
+        flexDirection: "row",
+        alignItems: "flex-start",
+        gap: 12,
+        marginTop: 16,
+        padding: 14,
+        borderRadius: 14,
+        borderWidth: 1,
+    },
+    statusTitle: { fontSize: 13, fontWeight: "800", fontFamily: "System" },
+    statusMessage: { fontSize: 13, fontWeight: "500", lineHeight: 19, marginTop: 2, fontFamily: "System" },
+    statusAction: {
+        flexDirection: "row",
+        alignItems: "center",
+        alignSelf: "flex-start",
+        gap: 6,
+        marginTop: 10,
+        paddingHorizontal: 14,
+        paddingVertical: 8,
+        borderRadius: 20,
+    },
+    statusActionText: { color: "#FFF", fontSize: 13, fontWeight: "800", fontFamily: "System" },
 
+    // Import
+    progressCard: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 12,
+        marginTop: 16,
+        padding: 16,
+        borderRadius: 16,
+        borderWidth: 1,
+    },
+    progressText: { flex: 1, fontSize: 14, fontWeight: "700", fontFamily: "System" },
     importBtn: {
-        marginTop: 24,
-        height: 50,
-        borderRadius: 25,
+        flexDirection: "row",
+        gap: 8,
+        marginTop: 16,
+        height: 52,
+        borderRadius: 26,
         justifyContent: "center",
         alignItems: "center",
     },
-    importBtnText: { color: "#FFF", fontSize: 16, fontWeight: "700" },
+    importBtnText: { fontSize: 16, fontWeight: "800", fontFamily: "System" },
 
-    clearBtn: {
-        height: 50,
-        justifyContent: "center",
+    // Danger zone
+    dangerCard: { flexDirection: "row", alignItems: "center", gap: 16, flexWrap: "wrap" },
+    dangerTitle: { fontSize: 15, fontWeight: "800", fontFamily: "System" },
+    dangerDesc: { fontSize: 12, fontWeight: "500", lineHeight: 18, marginTop: 4, fontFamily: "System" },
+    dangerBtn: {
+        flexDirection: "row",
         alignItems: "center",
+        gap: 6,
+        paddingHorizontal: 16,
+        paddingVertical: 10,
+        borderRadius: 20,
+        borderWidth: 1.5,
     },
-    clearBtnText: { fontSize: 14, fontWeight: "600" },
+    dangerBtnText: { fontSize: 13, fontWeight: "800", fontFamily: "System" },
 });

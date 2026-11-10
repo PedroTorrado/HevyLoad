@@ -203,8 +203,12 @@ export default function Profile() {
     }
 
     return (
-        <ScrollView style={[styles.container, { backgroundColor: colors.background }]} showsVerticalScrollIndicator={false}>
-            <View style={[styles.header, { paddingTop: insets.top + 20, backgroundColor: colors.secondaryBackground }]}>
+        <ScrollView
+            style={[styles.container, { backgroundColor: colors.background }]}
+            contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}
+            showsVerticalScrollIndicator={false}
+        >
+            <View style={[styles.header, { paddingTop: insets.top + 10, backgroundColor: colors.background, borderBottomColor: colors.border }]}>
                 <View style={styles.headerRow}>
                     <Pressable onPress={handleBack}>
                         <Ionicons name="arrow-back" size={24} color={colors.text} />
@@ -246,7 +250,7 @@ export default function Profile() {
                     )}
                 </View>
 
-                <View style={[styles.card, { backgroundColor: colors.background, borderColor: colors.border }]}>
+                <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
                     <View style={styles.field}>
                         <Text style={[styles.label, { color: colors.accentText }]}>{t("app.profile.name")}</Text>
                         <TextInput
@@ -311,8 +315,8 @@ export default function Profile() {
 
                 {editing && (
                     <>
-                        <Text style={[styles.sectionTitle, { color: colors.accentText, marginTop: 12 }]}>{t("app.profile.featured_lifts")}</Text>
-                        <View style={[styles.card, { backgroundColor: colors.background, borderColor: colors.border, marginTop: 16 }]}>
+                        <Text style={[styles.sectionTitle, { color: colors.accentText, marginTop: 12, marginBottom: 16 }]}>{t("app.profile.featured_lifts")}</Text>
+                        <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border, marginTop: 0 }]}>
                             <ScrollView style={{ maxHeight: 200 }}>
                                 {exercises.map((ex) => {
                                     const isSBD = ["squat", "bench", "deadlift"].some(n => ex.name.toLowerCase().includes(n));
@@ -348,7 +352,7 @@ export default function Profile() {
                     </Pressable>
                 )}
 
-                <Text style={[styles.sectionTitle, { color: colors.accentText, marginTop: 12 }]}>{t("app.profile.theme")}</Text>
+                <Text style={[styles.sectionTitle, { color: colors.accentText, marginBottom: 16 }]}>{t("app.profile.theme")}</Text>
                 <View style={styles.choiceContainer}>
                     <Pressable 
                         style={[styles.choiceBtn, { borderColor: colors.border }, themeMode === "auto" && { backgroundColor: colors.primary, borderColor: colors.primary }]} 
@@ -370,7 +374,7 @@ export default function Profile() {
                     </Pressable>
                 </View>
 
-                <Text style={[styles.sectionTitle, { color: colors.accentText, marginTop: 12 }]}>{t("app.profile.plate_preference")}</Text>
+                <Text style={[styles.sectionTitle, { color: colors.accentText, marginBottom: 16 }]}>{t("app.profile.plate_preference")}</Text>
                 <View style={styles.choiceContainer}>
                     <Pressable 
                         style={[styles.choiceBtn, { borderColor: colors.border }, plateType === 20 && { backgroundColor: colors.primary, borderColor: colors.primary }]} 
@@ -386,7 +390,7 @@ export default function Profile() {
                     </Pressable>
                 </View>
 
-                <Text style={[styles.sectionTitle, { color: colors.accentText, marginTop: 12 }]}>{t("app.profile.language")}</Text>
+                <Text style={[styles.sectionTitle, { color: colors.accentText, marginBottom: 16 }]}>{t("app.profile.language")}</Text>
                 <View style={styles.choiceContainer}>
                     <Pressable 
                         style={[styles.choiceBtn, { borderColor: colors.border }, i18n.language.startsWith("en") && { backgroundColor: colors.primary, borderColor: colors.primary }]} 
@@ -407,7 +411,6 @@ export default function Profile() {
                     <Text style={[styles.signOutText, { color: colors.error }]}>{t("app.profile.logout")}</Text>
                 </Pressable>
             </View>
-            <View style={{ height: 40 }} />
         </ScrollView>
     );
 }
@@ -417,29 +420,30 @@ const styles = StyleSheet.create({
     loadingContainer: { flex: 1, justifyContent: "center", alignItems: "center" },
     header: {
         alignItems: "center",
-        paddingHorizontal: 24,
-        paddingBottom: 32,
+        paddingHorizontal: 16,
+        paddingBottom: 24,
+        borderBottomWidth: 1,
     },
     headerRow: {
         width: "100%",
         flexDirection: "row",
         justifyContent: "space-between",
         alignItems: "center",
-        marginBottom: 24,
+        marginBottom: 20,
     },
-    headerTitle: { fontSize: 16, fontWeight: "700", textTransform: "uppercase", letterSpacing: 1 },
-    avatarWrapper: { marginBottom: 16 },
+    headerTitle: { fontSize: 18, fontWeight: "700" },
+    avatarWrapper: { marginBottom: 12 },
     avatarContainer: {
-        width: 100,
-        height: 100,
-        borderRadius: 50,
+        width: 88,
+        height: 88,
+        borderRadius: 44,
         justifyContent: "center",
         alignItems: "center",
         position: "relative",
     },
-    avatarImage: { width: 100, height: 100, borderRadius: 50 },
-    avatarPlaceholder: { width: 100, height: 100, borderRadius: 50, justifyContent: "center", alignItems: "center" },
-    avatarInitial: { fontSize: 40, fontWeight: "bold" },
+    avatarImage: { width: 88, height: 88, borderRadius: 44 },
+    avatarPlaceholder: { width: 88, height: 88, borderRadius: 44, justifyContent: "center", alignItems: "center" },
+    avatarInitial: { fontSize: 36, fontWeight: "bold" },
     editBadge: {
         position: "absolute",
         bottom: 0,
@@ -451,17 +455,17 @@ const styles = StyleSheet.create({
         alignItems: "center",
         borderWidth: 2,
     },
-    userName: { fontSize: 24, fontWeight: "800" },
+    userName: { fontSize: 22, fontWeight: "800" },
     userEmail: { fontSize: 14, marginTop: 4 },
 
-    body: { paddingHorizontal: 24, paddingTop: 32 },
+    body: { width: "100%", maxWidth: 1120, alignSelf: "center", paddingHorizontal: 16, paddingTop: 24 },
     sectionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16 },
     sectionTitle: { fontSize: 13, fontWeight: "800", textTransform: "uppercase", letterSpacing: 1 },
     editActionText: { fontSize: 14, fontWeight: "600" },
     cancelActionText: { fontSize: 14, fontWeight: "600" },
 
-    card: { borderWidth: 1, borderRadius: 12, overflow: "hidden", marginBottom: 16 },
-    field: { paddingHorizontal: 16, paddingVertical: 12 },
+    card: { borderWidth: 1, borderRadius: 16, overflow: "hidden", marginBottom: 16 },
+    field: { paddingHorizontal: 16, paddingVertical: 14 },
     label: { fontSize: 11, fontWeight: "700", textTransform: "uppercase", marginBottom: 4 },
     input: { fontSize: 16, padding: 0 },
     divider: { height: 1 },
@@ -495,13 +499,13 @@ const styles = StyleSheet.create({
     exercisePickName: { fontSize: 14, fontWeight: "600" },
 
     errorText: { textAlign: "center", marginBottom: 16 },
-    saveBtn: { paddingVertical: 16, borderRadius: 8, alignItems: "center", marginBottom: 32 },
+    saveBtn: { paddingVertical: 15, borderRadius: 12, alignItems: "center", marginBottom: 28 },
     saveBtnText: { fontWeight: "700", fontSize: 16 },
 
-    choiceContainer: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 16, marginBottom: 32 },
-    choiceBtn: { flex: 1, paddingVertical: 12, alignItems: "center", borderRadius: 8, borderWidth: 1 },
+    choiceContainer: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginBottom: 28 },
+    choiceBtn: { flex: 1, minWidth: 100, paddingVertical: 12, alignItems: "center", borderRadius: 12, borderWidth: 1 },
     choiceBtnText: { fontSize: 14, fontWeight: "600" },
 
-    signOutBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 12 },
+    signOutBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 16, marginTop: 4 },
     signOutText: { fontSize: 16, fontWeight: "600" },
 });

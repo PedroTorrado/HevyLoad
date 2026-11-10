@@ -41,7 +41,8 @@ function RootLayoutNav() {
         const inAuthScreen = segments[0] === "auth";
         const inAppScreen = segments[0] === "app";
         const firstSegment = String(segments[0] ?? "");
-        const isResetPasswordScreen = inAuthScreen && String(segments[1] ?? "") === "reset-password";
+        const isResetPasswordScreen = inAuthScreen
+            && segments.slice(1).join("/") === "reset-password";
 
         if (session && isRecoverySession && !isResetPasswordScreen) {
             router.replace("/auth/reset-password" as any);

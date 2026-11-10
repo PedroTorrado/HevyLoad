@@ -1,15 +1,20 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter, useFocusEffect } from "expo-router";
-import { useCallback, useState, useRef, useEffect } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { 
-    ActivityIndicator, 
-    FlatList, 
-    Pressable, 
-    StyleSheet, 
-    Text, 
-    View, 
-    TextInput 
+import {
+    ActivityIndicator,
+    Animated,
+    Easing,
+    FlatList,
+    Platform,
+    Pressable,
+    StyleProp,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
+    ViewStyle,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "../../lib/supabase";
@@ -22,6 +27,74 @@ interface Exercise {
     sets_count: number;
 }
 
+const USE_NATIVE_DRIVER = Platform.OS !== "web";
+
+function FadeInView({
+    delay = 0,
+    style,
+    children,
+}: {
+    delay?: number;
+    style?: StyleProp<ViewStyle>;
+    children: ReactNode;
+}) {
+    const progress = useRef(new Animated.Value(0)).current;
+
+    useEffect(() => {
+        Animated.timing(progress, {
+            toValue: 1,
+            duration: 350,
+            delay,
+            easing: Easing.out(Easing.cubic),
+            useNativeDriver: USE_NATIVE_DRIVER,
+        }).start();
+    }, [delay, progress]);
+
+    return (
+        <Animated.View
+            style={[
+                style,
+                {
+                    opacity: progress,
+                    transform: [
+                        { translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [10, 0] }) },
+                    ],
+                },
+            ]}
+        >
+            {children}
+        </Animated.View>
+    );
+}
+
+function ScalePressable({
+    onPress,
+    style,
+    children,
+    accessibilityLabel,
+}: {
+    onPress?: () => void;
+    style?: StyleProp<ViewStyle>;
+    children: ReactNode;
+    accessibilityLabel?: string;
+}) {
+    const scale = useRef(new Animated.Value(1)).current;
+    const animateTo = (toValue: number) =>
+        Animated.spring(scale, { toValue, friction: 6, tension: 220, useNativeDriver: USE_NATIVE_DRIVER }).start();
+
+    return (
+        <Pressable
+            onPress={onPress}
+            onPressIn={() => animateTo(0.98)}
+            onPressOut={() => animateTo(1)}
+            accessibilityRole="button"
+            accessibilityLabel={accessibilityLabel}
+        >
+            <Animated.View style={[style, { transform: [{ scale }] }]}>{children}</Animated.View>
+        </Pressable>
+    );
+}
+
 export default function Exercises() {
     const router = useRouter();
     const { t } = useTranslation();
@@ -29,86 +102,79 @@ export default function Exercises() {
     const colors = useThemeColor();
 
     const [loading, setLoading] = useState(false);
-    const hasLoaded = useRef(false);
     const [exercises, setExercises] = useState<Exercise[]>([]);
     const [featuredIds, setFeaturedIds] = useState<string[]>([]);
     const [searchQuery, setSearchQuery] = useState("");
 
     useFocusEffect(
         useCallback(() => {
-            loadExercises(false);
+            let isMounted = true;
+
+            async function loadExercises() {
+                if (exercises.length === 0) setLoading(true);
+                try {
+                    const { data: { session } } = await supabase.auth.getSession();
+                    const user = session?.user;
+                    if (!user || !isMounted) return;
+
+                    // Fetch exercises and profile (for featured exercises) in parallel
+                    const [exercisesRes, profileRes] = await Promise.all([
+                        supabase.from("exercises").select("*, sets(count)").eq("user_id", user.id),
+                        supabase.from("profiles").select("featured_exercise_ids").eq("id", user.id).single(),
+                    ]);
+
+                    if (!isMounted) return;
+
+                    const featured: string[] = profileRes.data?.featured_exercise_ids || [];
+                    setFeaturedIds(featured);
+
+                    if (exercisesRes.error) {
+                        console.error("Error loading exercises:", exercisesRes.error);
+                        setExercises([]);
+                        return;
+                    }
+
+                    const mappedData: Exercise[] = (exercisesRes.data || []).map((ex: any) => ({
+                        ...ex,
+                        sets_count: ex.sets?.[0]?.count || 0,
+                    }));
+
+                    // Sort: Featured first, then by sets_count descending, then by name ascending
+                    mappedData.sort((a, b) => {
+                        const aFeatured = featured.includes(a.id);
+                        const bFeatured = featured.includes(b.id);
+                        if (aFeatured !== bFeatured) return aFeatured ? -1 : 1;
+                        if (b.sets_count !== a.sets_count) return b.sets_count - a.sets_count;
+                        return a.name.localeCompare(b.name);
+                    });
+
+                    setExercises(mappedData);
+                } catch (error: any) {
+                    if (!error?.message?.includes("aborted")) {
+                        console.error("Exercises load error:", error);
+                    }
+                } finally {
+                    if (isMounted) setLoading(false);
+                }
+            }
+
+            loadExercises();
+
+            return () => {
+                isMounted = false;
+            };
         }, [])
     );
 
-    useEffect(() => {
-        loadExercises(true);
-        hasLoaded.current = true;
-    }, []);
-
-    async function loadExercises(showLoader: boolean) {
-        if (showLoader && exercises.length === 0) setLoading(true);
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return;
-
-        // Fetch exercises and profile (for featured exercises) in parallel
-        const [exercisesRes, profileRes] = await Promise.all([
-            supabase
-                .from("exercises")
-                .select(`
-                    *,
-                    sets(count)
-                `)
-                .eq("user_id", user.id),
-            supabase
-                .from("profiles")
-                .select("featured_exercise_ids")
-                .eq("id", user.id)
-                .single()
-        ]);
-
-        if (profileRes.data) {
-            setFeaturedIds(profileRes.data.featured_exercise_ids || []);
-        }
-
-        if (exercisesRes.error) {
-            console.error("Error loading exercises:", exercisesRes.error);
-        } else {
-            const mappedData: Exercise[] = (exercisesRes.data || []).map((ex: any) => ({
-                ...ex,
-                sets_count: ex.sets?.[0]?.count || 0
-            }));
-
-            // Sort: Featured first, then by sets_count descending, then by name ascending
-            mappedData.sort((a, b) => {
-                const aFeatured = (profileRes.data?.featured_exercise_ids || []).includes(a.id);
-                const bFeatured = (profileRes.data?.featured_exercise_ids || []).includes(b.id);
-                
-                if (aFeatured && !bFeatured) return -1;
-                if (!aFeatured && bFeatured) return 1;
-                
-                if (b.sets_count !== a.sets_count) {
-                    return b.sets_count - a.sets_count;
-                }
-                return a.name.localeCompare(b.name);
-            });
-
-            setExercises(mappedData);
-        }
-
-        setLoading(false);
-    }
-
     async function toggleFavorite(exerciseId: string) {
         try {
-            const { data: { user } } = await supabase.auth.getUser();
+            const { data: { session } } = await supabase.auth.getSession();
+            const user = session?.user;
             if (!user) return;
 
-            let newFeaturedIds = [...featuredIds];
-            if (newFeaturedIds.includes(exerciseId)) {
-                newFeaturedIds = newFeaturedIds.filter(id => id !== exerciseId);
-            } else {
-                newFeaturedIds.push(exerciseId);
-            }
+            const newFeaturedIds = featuredIds.includes(exerciseId)
+                ? featuredIds.filter((id) => id !== exerciseId)
+                : [...featuredIds, exerciseId];
 
             const { error } = await supabase
                 .from("profiles")
@@ -130,44 +196,60 @@ export default function Exercises() {
         }
     };
 
-    const filteredExercises = exercises.filter(ex => 
-        ex.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (ex.muscle_group && ex.muscle_group.toLowerCase().includes(searchQuery.toLowerCase()))
+    const query = searchQuery.toLowerCase();
+    const filteredExercises = exercises.filter(
+        (ex) => ex.name.toLowerCase().includes(query) || (ex.muscle_group?.toLowerCase().includes(query) ?? false)
     );
 
-    const renderExerciseItem = ({ item }: { item: Exercise }) => {
+    const renderExerciseItem = ({ item, index }: { item: Exercise; index: number }) => {
         const isFeatured = featuredIds.includes(item.id);
-        
-        return (
-            <Pressable 
-                style={[styles.exerciseCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-                onPress={() => router.push(`/app/exercise/${item.id}` as any)}
-            >
-                <Pressable 
-                    onPress={() => toggleFavorite(item.id)}
-                    style={styles.starButton}
-                >
-                    <Ionicons 
-                        name={isFeatured ? "star" : "star-outline"} 
-                        size={22} 
-                        color={isFeatured ? "#FFD700" : colors.secondaryText} 
-                    />
-                </Pressable>
 
-                <View style={styles.exerciseInfo}>
-                    <Text style={[styles.exerciseName, { color: colors.text }]}>{item.name}</Text>
-                    <View style={styles.exerciseMeta}>
-                        <Text style={[styles.muscleGroup, { color: colors.secondaryText }]}>
-                            {item.muscle_group || t("app.exercises.no_muscle_group")}
+        return (
+            <FadeInView delay={Math.min(300, index * 40)}>
+                <ScalePressable
+                    onPress={() => router.push(`/app/exercise/${item.id}` as any)}
+                    style={[styles.exerciseCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+                    accessibilityLabel={item.name}
+                >
+                    <Pressable
+                        onPress={() => toggleFavorite(item.id)}
+                        hitSlop={6}
+                        accessibilityRole="button"
+                        accessibilityLabel={isFeatured ? `Unstar ${item.name}` : `Star ${item.name}`}
+                        style={[
+                            styles.starBadge,
+                            isFeatured
+                                ? { backgroundColor: "#FFD70018", borderColor: "#FFD70040" }
+                                : { backgroundColor: colors.tint + "12", borderColor: colors.tint + "28" },
+                        ]}
+                    >
+                        <Ionicons
+                            name={isFeatured ? "star" : "star-outline"}
+                            size={20}
+                            color={isFeatured ? "#FFD700" : colors.secondaryText}
+                        />
+                    </Pressable>
+
+                    <View style={styles.exerciseInfo}>
+                        <Text style={[styles.exerciseName, { color: colors.text }]} numberOfLines={1}>
+                            {item.name}
                         </Text>
-                        <View style={[styles.dot, { backgroundColor: colors.border }]} />
-                        <Text style={[styles.performanceCount, { color: colors.tint }]}>
-                            {item.sets_count} {item.sets_count === 1 ? "set" : "sets"}
-                        </Text>
+                        <View style={styles.exerciseMeta}>
+                            <Ionicons name="body-outline" size={13} color={colors.secondaryText} />
+                            <Text style={[styles.metaText, { color: colors.secondaryText }]}>
+                                {item.muscle_group || t("app.exercises.no_muscle_group")}
+                            </Text>
+                            <View style={[styles.metaDot, { backgroundColor: colors.border }]} />
+                            <Ionicons name="layers-outline" size={13} color={colors.secondaryText} />
+                            <Text style={[styles.metaText, { color: colors.secondaryText }]}>
+                                {item.sets_count} {t("app.workout.sets")}
+                            </Text>
+                        </View>
                     </View>
-                </View>
-                <Ionicons name="chevron-forward" size={20} color={colors.border} />
-            </Pressable>
+
+                    <Ionicons name="chevron-forward" size={16} color={colors.secondaryText} />
+                </ScalePressable>
+            </FadeInView>
         );
     };
 
@@ -175,34 +257,54 @@ export default function Exercises() {
         <View style={[styles.container, { backgroundColor: colors.background }]}>
             {/* Header */}
             <View style={[styles.header, { paddingTop: insets.top + 10, borderBottomColor: colors.border }]}>
-                <Pressable onPress={handleBack} style={styles.backBtn}>
+                <Pressable
+                    onPress={handleBack}
+                    style={styles.backBtn}
+                    accessibilityRole="button"
+                    accessibilityLabel={t("common.back")}
+                >
                     <Ionicons name="chevron-back" size={28} color={colors.text} />
                 </Pressable>
-                <Text style={[styles.headerTitle, { color: colors.text }]}>{t("app.exercises.title")}</Text>
-                <View style={{ width: 40 }} />
+
+                <View style={styles.headerInfo}>
+                    <Text style={[styles.headerTitle, { color: colors.text }]} numberOfLines={1}>
+                        {t("app.exercises.title")}
+                    </Text>
+                    <Text style={[styles.headerSubtitle, { color: colors.secondaryText }]} numberOfLines={1}>
+                        {exercises.length} {exercises.length === 1 ? "exercise" : "exercises"} · {featuredIds.length} starred
+                    </Text>
+                </View>
+
+                <View style={styles.backBtn} />
             </View>
 
             {/* Search Bar */}
             <View style={[styles.searchContainer, { borderBottomColor: colors.border }]}>
-                <View style={[styles.searchBar, { backgroundColor: colors.secondary }]}>
-                    <Ionicons name="search" size={20} color={colors.secondaryText} style={styles.searchIcon} />
+                <View style={[styles.searchBar, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                    <Ionicons name="search" size={18} color={colors.secondaryText} style={styles.searchIcon} />
                     <TextInput
                         placeholder={t("app.exercises.search_placeholder")}
                         placeholderTextColor={colors.secondaryText}
                         style={[styles.searchInput, { color: colors.text }]}
                         value={searchQuery}
                         onChangeText={setSearchQuery}
+                        accessibilityLabel={t("app.exercises.search_placeholder")}
                     />
                     {searchQuery.length > 0 && (
-                        <Pressable onPress={() => setSearchQuery("")}>
-                            <Ionicons name="close-circle" size={20} color={colors.secondaryText} />
+                        <Pressable
+                            onPress={() => setSearchQuery("")}
+                            hitSlop={8}
+                            accessibilityRole="button"
+                            accessibilityLabel="Clear search"
+                        >
+                            <Ionicons name="close-circle" size={18} color={colors.secondaryText} />
                         </Pressable>
                     )}
                 </View>
             </View>
 
-            {loading ? (
-                <View style={styles.center}>
+            {loading && exercises.length === 0 ? (
+                <View style={[styles.center, { backgroundColor: colors.background }]}>
                     <ActivityIndicator size="large" color={colors.tint} />
                 </View>
             ) : (
@@ -210,14 +312,42 @@ export default function Exercises() {
                     data={filteredExercises}
                     renderItem={renderExerciseItem}
                     keyExtractor={(item) => item.id}
-                    contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + 20 }]}
+                    keyboardShouldPersistTaps="handled"
+                    contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + 32 }]}
                     ListEmptyComponent={
-                        <View style={styles.emptyState}>
-                            <Ionicons name="barbell-outline" size={64} color={colors.border} />
-                            <Text style={[styles.emptyText, { color: colors.secondaryText }]}>
+                        <FadeInView style={styles.emptyState}>
+                            <View style={[styles.emptyIconCircle, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                                <Ionicons
+                                    name={searchQuery ? "search-outline" : "barbell-outline"}
+                                    size={36}
+                                    color={colors.secondaryText}
+                                />
+                            </View>
+                            <Text style={[styles.emptyTitle, { color: colors.text }]}>
                                 {searchQuery ? t("app.exercises.no_results") : t("app.exercises.no_exercises")}
                             </Text>
-                        </View>
+                            {searchQuery ? (
+                                <Pressable
+                                    onPress={() => setSearchQuery("")}
+                                    style={[styles.emptyActionBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
+                                    accessibilityRole="button"
+                                    accessibilityLabel="Clear search"
+                                >
+                                    <Text style={[styles.emptyActionText, { color: colors.tint }]}>Clear search</Text>
+                                </Pressable>
+                            ) : (
+                                <Pressable
+                                    onPress={() => router.push("/app/import" as any)}
+                                    style={[styles.emptyActionBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
+                                    accessibilityRole="button"
+                                    accessibilityLabel={t("app.dashboard.import_card.title")}
+                                >
+                                    <Text style={[styles.emptyActionText, { color: colors.tint }]}>
+                                        {t("app.dashboard.import_card.title")}
+                                    </Text>
+                                </Pressable>
+                            )}
+                        </FadeInView>
                     }
                 />
             )}
@@ -227,70 +357,110 @@ export default function Exercises() {
 
 const styles = StyleSheet.create({
     container: { flex: 1 },
+    center: { flex: 1, justifyContent: "center", alignItems: "center", padding: 24 },
+
     header: {
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "space-between",
         paddingHorizontal: 16,
-        paddingBottom: 10,
+        paddingBottom: 12,
         borderBottomWidth: 1,
     },
-    backBtn: { width: 40, height: 40, justifyContent: "center" },
-    headerTitle: { fontSize: 18, fontWeight: "700" },
+    backBtn: {
+        width: 40,
+        height: 40,
+        justifyContent: "center",
+        alignItems: "center",
+    },
+    headerInfo: {
+        flex: 1,
+        alignItems: "center",
+        paddingHorizontal: 8,
+    },
+    headerTitle: {
+        fontSize: 16,
+        fontWeight: "800",
+        fontFamily: "System",
+    },
+    headerSubtitle: {
+        fontSize: 12,
+        fontWeight: "600",
+        fontFamily: "System",
+        marginTop: 1,
+    },
 
     searchContainer: {
-        padding: 16,
+        paddingHorizontal: 16,
+        paddingVertical: 12,
         borderBottomWidth: 1,
     },
     searchBar: {
         flexDirection: "row",
         alignItems: "center",
         paddingHorizontal: 12,
-        height: 44,
-        borderRadius: 10,
+        height: 42,
+        borderRadius: 12,
+        borderWidth: 1,
+        width: "100%",
+        maxWidth: 920,
+        alignSelf: "center",
     },
     searchIcon: { marginRight: 8 },
-    searchInput: { flex: 1, fontSize: 16, fontWeight: "500" },
+    searchInput: { flex: 1, fontSize: 14, fontWeight: "600", fontFamily: "System" },
 
-    listContent: { padding: 16, gap: 12 },
+    listContent: {
+        padding: 16,
+        width: "100%",
+        maxWidth: 920,
+        alignSelf: "center",
+        gap: 10,
+    },
+
     exerciseCard: {
         flexDirection: "row",
         alignItems: "center",
-        padding: 12,
+        padding: 14,
+        borderRadius: 16,
+        borderWidth: 1,
+        gap: 12,
+    },
+    starBadge: {
+        width: 44,
+        height: 44,
+        borderRadius: 12,
+        borderWidth: 1,
+        justifyContent: "center",
+        alignItems: "center",
+    },
+    exerciseInfo: { flex: 1 },
+    exerciseName: { fontSize: 15, fontWeight: "800", fontFamily: "System", marginBottom: 3 },
+    exerciseMeta: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 4 },
+    metaText: { fontSize: 12, fontWeight: "600", fontFamily: "System" },
+    metaDot: { width: 3, height: 3, borderRadius: 1.5, marginHorizontal: 2 },
+
+    emptyState: {
+        alignItems: "center",
+        justifyContent: "center",
+        paddingVertical: 56,
+        gap: 6,
+    },
+    emptyIconCircle: {
+        width: 68,
+        height: 68,
+        borderRadius: 34,
+        borderWidth: 1,
+        justifyContent: "center",
+        alignItems: "center",
+        marginBottom: 8,
+    },
+    emptyTitle: { fontSize: 15, fontWeight: "800", fontFamily: "System", textAlign: "center", paddingHorizontal: 32 },
+    emptyActionBtn: {
+        marginTop: 12,
+        paddingHorizontal: 16,
+        paddingVertical: 10,
         borderRadius: 12,
         borderWidth: 1,
     },
-    starButton: {
-        width: 40,
-        height: 40,
-        justifyContent: "center",
-        alignItems: "center",
-        marginRight: 8,
-    },
-    iconContainer: {
-        width: 48,
-        height: 48,
-        borderRadius: 10,
-        justifyContent: "center",
-        alignItems: "center",
-        marginRight: 16,
-    },
-    exerciseInfo: { flex: 1 },
-    exerciseName: { fontSize: 16, fontWeight: "700", marginBottom: 2 },
-    exerciseMeta: {
-        flexDirection: "row",
-        alignItems: "center",
-    },
-    muscleGroup: { fontSize: 13, fontWeight: "500" },
-    dot: {
-        width: 3,
-        height: 3,
-        borderRadius: 1.5,
-        marginHorizontal: 8,
-    },
-    performanceCount: { fontSize: 13, fontWeight: "600" },
-
-    center: { flex: 1, justifyContent: "center", alignItems: "center" },
-    emptyState: { flex: 1, justifyContent: "center", alignItems: "center", marginTop: 100 },
-    emptyText: { marginTop: 16, fontSize: 16, fontWeight: "600", textAlign: "center", paddingHorizontal: 32 },
+    emptyActionText: { fontSize: 13, fontWeight: "800", fontFamily: "System" },
 });

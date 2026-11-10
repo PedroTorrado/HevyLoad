@@ -9,8 +9,26 @@ import { useThemeColor } from "../../lib/theme";
 import { usePreferences } from "../../lib/preferences";
 import { getLocalYYYYMMDD } from "../../lib/date-utils";
 
+type PressState = { pressed: boolean; hovered?: boolean };
+
+/** Shared press / hover feedback so every tappable dashboard card feels interactive. */
+const pressFeedback = ({ pressed, hovered }: PressState) => ({
+    opacity: pressed ? 0.75 : hovered ? 0.9 : 1,
+    transform: [{ scale: pressed ? 0.98 : 1 }],
+});
+
+function formatWorkoutMeta(workout: any) {
+    const sets: any[] = workout.sets || [];
+    const volume = Math.round(sets.reduce((sum, s) => sum + (Number(s.weight_kg) || 0) * (Number(s.reps) || 0), 0));
+    const minutes = workout.end_time
+        ? Math.round((new Date(workout.end_time).getTime() - new Date(workout.start_time).getTime()) / 60000)
+        : 0;
+    const duration = minutes > 0 ? (minutes >= 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : `${minutes}m`) : null;
+    return { setCount: sets.length, volume, duration };
+}
+
 type WorkoutCalendarProps = {
-    workouts: { id: string; start_time: string; volume: number; durationMinutes: number }[];
+    workouts: { id: string; start_time: string; title?: string | null; volume: number; durationMinutes: number; isRun?: boolean; runKm?: number; runSeconds?: number }[];
     colors: ReturnType<typeof useThemeColor>;
     onWorkoutPress: (workoutId: string) => void;
     title: string;
@@ -36,15 +54,33 @@ function WorkoutCalendar({
     rollingLabel,
     yearLabel,
 }: WorkoutCalendarProps) {
+    const activityMatrixRef = useRef<ScrollView>(null);
     const [metric, setMetric] = useState<"volume" | "duration">("volume");
     const [selectedPeriod, setSelectedPeriod] = useState<"rolling" | number>("rolling");
     const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null);
     const workoutTotals = new Map<string, number>();
-    const workoutsByDate = new Map<string, { id: string; start_time: string }[]>();
+    const workoutsByDate = new Map<string, { id: string; start_time: string; title?: string | null; isRun?: boolean }[]>();
+    const runTotals = new Map<string, { km: number; seconds: number }>();
     workouts.forEach((workout) => {
         const date = getLocalYYYYMMDD(new Date(workout.start_time));
-        const value = metric === "volume" ? workout.volume : workout.durationMinutes;
-        workoutTotals.set(date, (workoutTotals.get(date) || 0) + value);
+        if (workout.isRun) {
+            const prev = runTotals.get(date) || { km: 0, seconds: 0 };
+            runTotals.set(date, {
+                km: prev.km + (workout.runKm || 0),
+                seconds: prev.seconds + (workout.runSeconds || workout.durationMinutes * 60),
+            });
+        } else {
+            const value = metric === "volume" ? workout.volume : workout.durationMinutes;
+            workoutTotals.set(date, (workoutTotals.get(date) || 0) + value);
+            // Running inside a strength session: count only the run sets themselves.
+            if ((workout.runKm || 0) > 0 || (workout.runSeconds || 0) > 0) {
+                const prev = runTotals.get(date) || { km: 0, seconds: 0 };
+                runTotals.set(date, {
+                    km: prev.km + (workout.runKm || 0),
+                    seconds: prev.seconds + (workout.runSeconds || 0),
+                });
+            }
+        }
         const dateWorkouts = workoutsByDate.get(date) || [];
         dateWorkouts.push(workout);
         workoutsByDate.set(date, dateWorkouts);
@@ -75,11 +111,27 @@ function WorkoutCalendar({
             date.setDate(monday.getDate() + weekIndex * 7 + dayIndex);
             const key = getLocalYYYYMMDD(date);
             const isInRange = date >= rangeStart && date <= rangeEnd;
-            return { key, value: isInRange ? workoutTotals.get(key) || 0 : 0, date };
+            const run = isInRange ? runTotals.get(key) : undefined;
+            return {
+                key,
+                value: isInRange ? workoutTotals.get(key) || 0 : 0,
+                runKm: run?.km || 0,
+                runMinutes: run ? Math.round(run.seconds / 60) : 0,
+                /** Seconds per km; null when no distance was logged. */
+                pace: run && run.km > 0 && run.seconds > 0 ? run.seconds / run.km : null,
+                date,
+            };
         })
     );
 
+    useEffect(() => {
+        activityMatrixRef.current?.scrollToEnd({ animated: false });
+    }, [selectedPeriod, weeks.length]);
+
     const maxValue = Math.max(...weeks.flat().map((day) => day.value), 1);
+    const paces = weeks.flat().map((day) => day.pace).filter((p): p is number => p !== null);
+    const fastestPace = paces.length ? Math.min(...paces) : 0;
+    const slowestPace = paces.length ? Math.max(...paces) : 0;
     const getCellColor = (value: number) => {
         if (value === 0) return colors.secondary;
         const intensity = value / maxValue;
@@ -87,6 +139,25 @@ function WorkoutCalendar({
         if (intensity <= 0.5) return "#60A5FA";
         if (intensity <= 0.75) return "#2563EB";
         return "#1E3A8A";
+    };
+    /** Purple scale for runs, by pace: faster (lower sec/km) = darker. */
+    const getRunColor = (pace: number | null) => {
+        if (pace === null) return "#C084FC";
+        const intensity = slowestPace === fastestPace ? 1 : (slowestPace - pace) / (slowestPace - fastestPace);
+        if (intensity <= 0.25) return "#C084FC";
+        if (intensity <= 0.5) return "#A855F7";
+        if (intensity <= 0.75) return "#7E22CE";
+        return "#581C87";
+    };
+    const formatPace = (pace: number) => {
+        const total = Math.round(pace);
+        return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")} /km`;
+    };
+    const isInRangeDay = (day: { date: Date }) => day.date >= rangeStart && day.date <= rangeEnd;
+    const getDayColor = (day: { value: number; runMinutes: number; pace: number | null; key: string }) => {
+        if (day.value > 0) return getCellColor(day.value);
+        if (day.runMinutes > 0 || workoutsByDate.get(day.key)?.some((w) => w.isRun)) return getRunColor(day.pace);
+        return colors.secondary;
     };
 
     const getDayAtPoint = (x: number, y: number) => {
@@ -179,13 +250,20 @@ function WorkoutCalendar({
                 >
                     <View style={styles.activitySelectionHeader}>
                         <Text style={[styles.activitySelectionDate, { color: selectedWorkout ? colors.tint : colors.text }]}>
-                            {selectedDateLabel || "Select a workout day"}
+                            {selectedWorkout
+                                ? `${workoutsByDate.get(selectedDay!.key)!.map((w) => w.title || "Workout").join(" + ")} · ${selectedDateLabel}`
+                                : selectedDateLabel || "Select a workout day"}
                         </Text>
                         {selectedWorkout && <Ionicons name="arrow-forward-circle" size={17} color={colors.tint} />}
                     </View>
                     {selectedDay && (
                         <Text style={[styles.activitySelectionValue, { color: colors.secondaryText }]}>
-                            {selectedDay.value} {metric === "volume" ? "kg" : "min"}
+                            {[
+                                selectedDay.value > 0 ? `${Math.round(selectedDay.value)} ${metric === "volume" ? "kg" : "min"}` : "",
+                                selectedDay.runMinutes > 0
+                                    ? `Run ${selectedDay.runKm > 0 ? `${selectedDay.runKm.toFixed(2)} km · ` : ""}${selectedDay.runMinutes} min${selectedDay.pace ? ` · ${formatPace(selectedDay.pace)}` : ""}`
+                                    : "",
+                            ].filter(Boolean).join(" · ") || `0 ${metric === "volume" ? "kg" : "min"}`}
                             {selectedWorkout ? " · Tap the date to open workout" : ""}
                         </Text>
                     )}
@@ -198,10 +276,13 @@ function WorkoutCalendar({
                         <Text style={[styles.activityDayLabel, styles.activityFridayLabel, { color: colors.secondaryText }]}>{weekdayLabels[2]}</Text>
                     </View>
                     <ScrollView
+                        ref={activityMatrixRef}
                         horizontal
-                        showsHorizontalScrollIndicator={false}
+                        showsHorizontalScrollIndicator
+                        persistentScrollbar
                         style={styles.activityMatrixScroll}
                         contentContainerStyle={styles.activityMatrixContent}
+                        onContentSizeChange={() => activityMatrixRef.current?.scrollToEnd({ animated: false })}
                     >
                         <View style={styles.activityWeeks} {...panResponder.panHandlers}>
                             {weeks.map((week, weekIndex) => {
@@ -237,8 +318,9 @@ function WorkoutCalendar({
                                             >
                                                 <View style={[
                                                     styles.activityCell,
+                                                    isInRangeDay(day) && day.value > 0 && (day.runMinutes > 0 || day.runKm > 0) && styles.activityCellMixed,
                                                     selectedDayKey === day.key && styles.activityCellSelected,
-                                                    { backgroundColor: getCellColor(day.value) },
+                                                    { backgroundColor: isInRangeDay(day) ? getDayColor(day) : colors.secondary },
                                                 ]} />
                                             </Pressable>
                                             );
@@ -256,6 +338,11 @@ function WorkoutCalendar({
                         <View key={level} style={[styles.activityCell, { backgroundColor: level === 0 ? colors.secondary : getCellColor(level * maxValue) }]} />
                     ))}
                     <Text style={[styles.activityLegendText, { color: colors.secondaryText }]}>{moreLabel}</Text>
+                    <Text style={[styles.activityLegendText, { color: colors.secondaryText, marginLeft: 10 }]}>Run pace: slower</Text>
+                    {["#C084FC", "#A855F7", "#7E22CE", "#581C87"].map((shade) => (
+                        <View key={shade} style={[styles.activityCell, { backgroundColor: shade }]} />
+                    ))}
+                    <Text style={[styles.activityLegendText, { color: colors.secondaryText }]}>faster</Text>
                 </View>
             </View>
         </View>
@@ -335,11 +422,12 @@ export default function Dashboard() {
         totalWorkouts: 0,
         totalVolume: 0,
         workoutsThisWeek: 0,
+        workoutsLast7Days: 0,
         weeklyTonnage: 0,
         powerliftingTotal: 0
     });
     const [recentWorkouts, setRecentWorkouts] = useState<any[]>([]);
-    const [activityWorkouts, setActivityWorkouts] = useState<{ id: string; start_time: string; volume: number; durationMinutes: number }[]>([]);
+    const [activityWorkouts, setActivityWorkouts] = useState<{ id: string; start_time: string; title?: string | null; volume: number; durationMinutes: number }[]>([]);
     const [sbdLifts, setSbdLifts] = useState<{name: string, value: number, id: string, type: string}[]>([]);
     const [otherLifts, setOtherLifts] = useState<{name: string, value: number, id: string}[]>([]);
 
@@ -367,7 +455,7 @@ export default function Dashboard() {
             // 1. Fetch Profile, Workouts, and Exercises
             const [profileRes, workoutsRes, exercisesRes, totalCountRes] = await Promise.all([
                 supabase.from("profiles").select("full_name, avatar_url, featured_exercise_ids").eq("id", user.id).single(),
-                supabase.from("workouts").select("id, start_time, end_time, title, sets(weight_kg, reps, exercise_id, duration_s)").eq("user_id", user.id).order("start_time", { ascending: false }).limit(1000),
+                supabase.from("workouts").select("id, start_time, end_time, title, sets(weight_kg, reps, exercise_id, duration_s, distance_km)").eq("user_id", user.id).order("start_time", { ascending: false }).limit(1000),
                 supabase.from("exercises").select("id, name").eq("user_id", user.id),
                 supabase.from("workouts").select("id", { count: 'exact', head: true }).eq("user_id", user.id)
             ]);
@@ -385,10 +473,19 @@ export default function Dashboard() {
                 const diff = now.getDate() - day + (day === 0 ? -6 : 1); // Monday
                 const startOfWeek = new Date(now.setDate(diff));
                 startOfWeek.setHours(0, 0, 0, 0);
+                const startOfLast7Days = new Date();
+                startOfLast7Days.setDate(startOfLast7Days.getDate() - 6);
+                startOfLast7Days.setHours(0, 0, 0, 0);
 
                 thisWeekCount = workouts.filter(w => new Date(w.start_time) >= startOfWeek).length;
+                const last7DaysCount = workouts.filter(w => new Date(w.start_time) >= startOfLast7Days).length;
 
-                setStats(prev => ({ ...prev, totalWorkouts: totalCountRes.count || workouts.length, workoutsThisWeek: thisWeekCount }));
+                setStats(prev => ({
+                    ...prev,
+                    totalWorkouts: totalCountRes.count || workouts.length,
+                    workoutsThisWeek: thisWeekCount,
+                    workoutsLast7Days: last7DaysCount,
+                }));
                 setRecentWorkouts(workouts.slice(0, 3));
             }
 
@@ -448,15 +545,39 @@ export default function Dashboard() {
                 });
 
                 if (workoutsWithSets) {
-                    setActivityWorkouts(workoutsWithSets.map((workout: any) => ({
+                    const runKeywords = ["run", "jog", "treadmill", "corrida", "correr", "carrera", "passadeira", "laufen", "corsa"];
+                    const runExerciseIds = new Set(
+                        exercisesRes.data!
+                            .filter((ex) => runKeywords.some((k) => ex.name.toLowerCase().includes(k)))
+                            .map((ex) => ex.id)
+                    );
+                    const treadmillIds = new Set(
+                        exercisesRes.data!
+                            .filter((ex) => ["treadmill", "passadeira", "cinta"].some((k) => ex.name.toLowerCase().includes(k)))
+                            .map((ex) => ex.id)
+                    );
+                    setActivityWorkouts(workoutsWithSets.map((workout: any) => {
+                        // Treadmill sets at 0 km (e.g. walking warm-ups) don't count as running.
+                        const sets = (workout.sets || []).filter(
+                            (set: any) => !(treadmillIds.has(set.exercise_id) && !(Number(set.distance_km) > 0))
+                        );
+                        const runSets = sets.filter((set: any) => runExerciseIds.has(set.exercise_id));
+                        return {
                         id: workout.id,
                         start_time: workout.start_time,
+                        title: workout.title,
+                        runKm: runSets.reduce((t: number, s: any) => t + (Number(s.distance_km) || 0), 0),
+                        runSeconds: runSets.reduce((t: number, s: any) => t + (Number(s.duration_s) || 0), 0),
+                        isRun: (workout.sets || []).length > 0
+                            ? sets.length > 0 && sets.every((set: any) => runExerciseIds.has(set.exercise_id))
+                            : runKeywords.some((k) => (workout.title || "").toLowerCase().includes(k)),
                         volume: (workout.sets || []).reduce((total: number, set: any) =>
                             total + (Number(set.weight_kg) || 0) * (Number(set.reps) || 0), 0),
                         durationMinutes: workout.end_time
                             ? Math.max(0, (new Date(workout.end_time).getTime() - new Date(workout.start_time).getTime()) / 60000)
                             : 0,
-                    })));
+                        };
+                    }));
                     workoutsWithSets.forEach(w => {
                         const workoutDate = new Date(w.start_time);
                         const isThisWeek = workoutDate >= startOfWeek;
@@ -528,13 +649,6 @@ export default function Dashboard() {
 
     const NAV_ITEMS = [
         {
-            title: t("app.dashboard.modules.suggestions.title"),
-            desc: t("app.dashboard.modules.suggestions.desc"),
-            route: "/app/suggestions",
-            icon: "sparkles" as const,
-            color: "#34C759",
-        },
-        {
             title: t("app.dashboard.modules.analytics.title"),
             desc: t("app.dashboard.modules.analytics.desc"),
             route: "/app/analytics",
@@ -554,6 +668,13 @@ export default function Dashboard() {
             route: "/app/history",
             icon: "list" as const,
             color: colors.text,
+        },
+        {
+            title: t("app.dashboard.modules.calendar.title"),
+            desc: t("app.dashboard.modules.calendar.desc"),
+            route: "/app/program-calendar",
+            icon: "calendar" as const,
+            color: "#A855F7",
         },
         {
             title: t("app.dashboard.import_card.title"),
@@ -587,7 +708,10 @@ export default function Dashboard() {
 
                     {/* Powerlifting Total Banner */}
                     {stats.powerliftingTotal > 0 && (
-                        <View style={[styles.totalBanner, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                        <Pressable
+                            onPress={() => router.push("/app/analytics" as any)}
+                            style={(state) => [styles.totalBanner, { backgroundColor: colors.card, borderColor: colors.border }, pressFeedback(state)]}
+                        >
                             <View>
                                 <Text style={[styles.totalLabel, { color: colors.secondaryText }]}>{t("app.dashboard.sbd_total")}</Text>
                                 <Text style={[styles.totalValue, { color: colors.text }]}>{stats.powerliftingTotal.toLocaleString()} <Text style={styles.unit}>kg</Text></Text>
@@ -595,23 +719,39 @@ export default function Dashboard() {
                             <View style={[styles.totalBadge, { backgroundColor: colors.tint + "20" }]}>
                                 <Ionicons name="trophy" size={24} color={colors.tint} />
                             </View>
-                        </View>
+                        </Pressable>
                     )}
 
                     {/* Stats Grid */}
                     <View style={styles.statsGrid}>
-                        <View style={[styles.statCard, { backgroundColor: colors.card }]}>
+                        <Pressable
+                            onPress={() => router.push("/app/history" as any)}
+                            style={(state) => [styles.statCard, { backgroundColor: colors.card }, pressFeedback(state)]}
+                        >
                             <Text style={[styles.statValue, { color: colors.text }]}>{stats.totalWorkouts}</Text>
                             <Text style={[styles.statLabel, { color: colors.secondaryText }]}>{t("app.dashboard.stats.workouts")}</Text>
-                        </View>
-                        <View style={[styles.statCard, { backgroundColor: colors.card }]}>
+                        </Pressable>
+                        <Pressable
+                            onPress={() => router.push("/app/history" as any)}
+                            style={(state) => [styles.statCard, { backgroundColor: colors.card }, pressFeedback(state)]}
+                        >
                             <Text style={[styles.statValue, { color: colors.text }]}>{stats.workoutsThisWeek}</Text>
                             <Text style={[styles.statLabel, { color: colors.secondaryText }]}>{t("app.dashboard.stats.this_week")}</Text>
-                        </View>
-                        <View style={[styles.statCard, { flex: 2, backgroundColor: colors.card }]}>
+                        </Pressable>
+                        <Pressable
+                            onPress={() => router.push("/app/history" as any)}
+                            style={(state) => [styles.statCard, { backgroundColor: colors.card }, pressFeedback(state)]}
+                        >
+                            <Text style={[styles.statValue, { color: colors.text }]}>{stats.workoutsLast7Days}</Text>
+                            <Text style={[styles.statLabel, { color: colors.secondaryText }]}>{t("app.dashboard.stats.last_7_days")}</Text>
+                        </Pressable>
+                        <Pressable
+                            onPress={() => router.push("/app/analytics" as any)}
+                            style={(state) => [styles.statCard, { flex: 2, backgroundColor: colors.card }, pressFeedback(state)]}
+                        >
                             <Text style={[styles.statValue, { color: colors.text }]}>{stats.weeklyTonnage.toLocaleString()} kg</Text>
                             <Text style={[styles.statLabel, { color: colors.secondaryText }]}>{t("app.dashboard.weekly_tonnage")}</Text>
-                        </View>
+                        </Pressable>
                     </View>
 
                     {/* The Big 3 Showdown */}
@@ -630,7 +770,7 @@ export default function Dashboard() {
                                     return (
                                         <Pressable 
                                             key={lift.id} 
-                                            style={[styles.big3Card, { backgroundColor: theme.bg + "15", borderColor: theme.bg + "30" }]}
+                                            style={(state) => [styles.big3Card, { backgroundColor: theme.bg + "15", borderColor: theme.bg + "30" }, pressFeedback(state)]}
                                             onPress={() => router.push(`/app/exercise/${lift.id}` as any)}
                                         >
                                             <View style={[styles.big3Icon, { backgroundColor: theme.bg }]}>
@@ -654,7 +794,7 @@ export default function Dashboard() {
                                 {otherLifts.map((lift) => (
                                     <Pressable 
                                         key={lift.id} 
-                                        style={[styles.maxCard, { backgroundColor: colors.card }]}
+                                        style={(state) => [styles.maxCard, { backgroundColor: colors.card }, pressFeedback(state)]}
                                         onPress={() => router.push(`/app/exercise/${lift.id}` as any)}
                                     >
                                         <Text style={[styles.maxLiftName, { color: colors.secondaryText }]} numberOfLines={1}>{lift.name}</Text>
@@ -705,19 +845,50 @@ export default function Dashboard() {
                                 </Pressable>
                             ) : (
                                 <View style={styles.recentSection}>
-                                    <Text style={[styles.sectionTitle, { color: colors.accentText }]}>{t("app.dashboard.sections.recent_workouts")}</Text>
-                                    {recentWorkouts.map((workout) => (
-                                        <View key={workout.id} style={[styles.workoutItem, { borderBottomColor: colors.border }]}>
-                                            <View style={[styles.workoutIcon, { backgroundColor: colors.secondary }]}>
-                                                <Ionicons name="fitness" size={20} color={colors.text} />
-                                            </View>
-                                            <View style={{ flex: 1 }}>
-                                                <Text style={[styles.workoutTitle, { color: colors.text }]}>{workout.title || "Workout"}</Text>
-                                                <Text style={[styles.workoutDate, { color: colors.secondaryText }]}>{new Date(workout.start_time).toLocaleDateString()}</Text>
-                                            </View>
-                                            <Ionicons name="chevron-forward" size={16} color={colors.border} />
-                                        </View>
-                                    ))}
+                                    <View style={styles.recentHeader}>
+                                        <Text style={[styles.sectionTitle, { color: colors.accentText, marginBottom: 0 }]}>{t("app.dashboard.sections.recent_workouts")}</Text>
+                                        <Pressable
+                                            onPress={() => router.push("/app/history" as any)}
+                                            hitSlop={8}
+                                            style={(state) => [styles.seeAllBtn, pressFeedback(state)]}
+                                        >
+                                            <Text style={[styles.seeAllText, { color: colors.tint }]}>{t("app.dashboard.sections.see_all")}</Text>
+                                            <Ionicons name="chevron-forward" size={12} color={colors.tint} />
+                                        </Pressable>
+                                    </View>
+                                    <View style={[styles.recentCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                                        {recentWorkouts.map((workout, index) => {
+                                            const meta = formatWorkoutMeta(workout);
+                                            const isLast = index === recentWorkouts.length - 1;
+                                            return (
+                                                <Pressable
+                                                    key={workout.id}
+                                                    onPress={() => router.push(`/app/workout/${workout.id}` as any)}
+                                                    accessibilityRole="button"
+                                                    accessibilityLabel={workout.title || "Workout"}
+                                                    style={({ pressed, hovered }: PressState) => [
+                                                        styles.workoutItem,
+                                                        !isLast && { borderBottomWidth: 1, borderBottomColor: colors.border },
+                                                        (pressed || hovered) && { backgroundColor: colors.secondary + (pressed ? "" : "80") },
+                                                    ]}
+                                                >
+                                                    <View style={[styles.workoutIcon, { backgroundColor: colors.tint + "1F" }]}>
+                                                        <Ionicons name="fitness" size={20} color={colors.tint} />
+                                                    </View>
+                                                    <View style={{ flex: 1 }}>
+                                                        <Text style={[styles.workoutTitle, { color: colors.text }]} numberOfLines={1}>{workout.title || "Workout"}</Text>
+                                                        <Text style={[styles.workoutDate, { color: colors.secondaryText }]} numberOfLines={1}>
+                                                            {new Date(workout.start_time).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })}
+                                                            {meta.duration ? ` · ${meta.duration}` : ""}
+                                                            {` · ${meta.setCount} ${t("app.workout.sets").toLowerCase()}`}
+                                                            {meta.volume > 0 ? ` · ${meta.volume.toLocaleString()} kg` : ""}
+                                                        </Text>
+                                                    </View>
+                                                    <Ionicons name="chevron-forward" size={16} color={colors.secondaryText} />
+                                                </Pressable>
+                                            );
+                                        })}
+                                    </View>
                                 </View>
                             )}
 
@@ -725,7 +896,7 @@ export default function Dashboard() {
                             <Text style={[styles.sectionTitle, { color: colors.accentText }]}>{t("app.dashboard.sections.quick_actions")}</Text>
                             <View style={styles.modulesGrid}>
                                 {NAV_ITEMS.map((item) => (
-                                    <Pressable key={item.title} style={[styles.navCard, { backgroundColor: colors.background, borderColor: colors.border }]} onPress={() => router.push(item.route as any)}>
+                                    <Pressable key={item.title} style={(state) => [styles.navCard, { backgroundColor: colors.background, borderColor: colors.border }, pressFeedback(state)]} onPress={() => router.push(item.route as any)}>
                                         <View style={[styles.iconBadge, { backgroundColor: item.color + "10" }]}>
                                             <Ionicons name={item.icon} size={24} color={item.color} />
                                         </View>
@@ -886,6 +1057,7 @@ const styles = StyleSheet.create({
         alignItems: "center",
         justifyContent: "center",
         paddingRight: 4,
+        paddingBottom: 12,
     },
     activityMatrixScroll: {
         flex: 1,
@@ -893,7 +1065,7 @@ const styles = StyleSheet.create({
     activityDayLabels: {
         position: "relative",
         width: 28,
-        height: 116,
+        height: 143,
         marginRight: 8,
     },
     activityMonthSpacer: {
@@ -967,7 +1139,7 @@ const styles = StyleSheet.create({
     activityWeek: {
         position: "relative",
         width: 13,
-        height: 116,
+        height: 131,
     },
     activityCells: {
         gap: 4,
@@ -986,6 +1158,11 @@ const styles = StyleSheet.create({
         width: 13,
         height: 13,
         borderRadius: 2,
+    },
+    /** Lifting day that also included a run. */
+    activityCellMixed: {
+        borderColor: "#A855F7",
+        borderWidth: 2,
     },
     activityCellSelected: {
         borderColor: "#FFFFFF",
@@ -1033,16 +1210,25 @@ const styles = StyleSheet.create({
     sectionTitle: { fontSize: 13, fontWeight: "800", textTransform: "uppercase", letterSpacing: 1, marginBottom: 16, fontFamily: "System" },
     
     recentSection: { marginBottom: 32 },
+    recentHeader: {
+        flexDirection: "row",
+        justifyContent: "space-between",
+        alignItems: "center",
+        marginBottom: 16,
+    },
+    seeAllBtn: { flexDirection: "row", alignItems: "center", gap: 2 },
+    seeAllText: { fontSize: 12, fontWeight: "800", fontFamily: "System" },
+    recentCard: { borderRadius: 16, borderWidth: 1, overflow: "hidden" },
     workoutItem: {
         flexDirection: "row",
         alignItems: "center",
         paddingVertical: 12,
-        borderBottomWidth: 1,
+        paddingHorizontal: 16,
     },
     workoutIcon: {
         width: 40,
         height: 40,
-        borderRadius: 8,
+        borderRadius: 10,
         justifyContent: "center",
         alignItems: "center",
         marginRight: 16,

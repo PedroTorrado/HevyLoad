@@ -48,8 +48,10 @@ export default function CustomProgramScreen() {
     const [blockLengthWeeks, setBlockLengthWeeks] = useState<BlockLength>(4);
     const [style, setStyle] = useState<CustomStyle>("mixed");
     const [variety, setVariety] = useState<"repeat" | "variation">("repeat");
+    const [includeDeload, setIncludeDeload] = useState(true);
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const handleBack = () => router.canGoBack() ? router.back() : router.replace("/app/dashboard");
 
     const draft = useMemo(() => generateCustomProgram({
         name,
@@ -62,14 +64,16 @@ export default function CustomProgramScreen() {
         avoidedExercises: [],
         style,
         variety,
-    }), [name, goal, sessionsPerWeek, scheduleMode, blockLengthWeeks, style, variety]);
+        includeDeload,
+        sessionMinutes: duration,
+    }), [name, goal, sessionsPerWeek, scheduleMode, blockLengthWeeks, style, variety, includeDeload, duration]);
 
     async function handleSave() {
         setSaving(true);
         setError(null);
         try {
             await saveCustomProgram(draft, true);
-            router.replace("/app/suggestions");
+            router.replace("/app/dashboard");
         } catch (saveError) {
             console.error("Custom program save error:", saveError);
             setError("We could not save this program. Apply the Supabase migration and try again.");
@@ -82,7 +86,7 @@ export default function CustomProgramScreen() {
         <View style={[screenStyles.container, { backgroundColor: colors.background }]}>
             <ScrollView contentContainerStyle={[screenStyles.content, { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 32 }]}>
                 <View style={screenStyles.header}>
-                    <Pressable onPress={() => router.back()} style={screenStyles.backButton} accessibilityLabel={t("app.suggestions.go_back")}>
+                    <Pressable onPress={handleBack} style={screenStyles.backButton} accessibilityLabel={t("app.suggestions.go_back")}>
                         <Ionicons name="chevron-back" size={24} color={colors.text} />
                     </Pressable>
                     <View>
@@ -91,6 +95,9 @@ export default function CustomProgramScreen() {
                         <Text style={[screenStyles.subtitle, { color: colors.secondaryText }]}>
                             Answer a few questions and we&apos;ll generate an editable starting point.
                         </Text>
+                        <Pressable onPress={() => router.push("/app/program-guide")} accessibilityRole="link">
+                            <Text style={[screenStyles.subtitle, { color: colors.tint, fontWeight: "700" }]}>How does this work? →</Text>
+                        </Pressable>
                     </View>
                 </View>
 
@@ -142,6 +149,17 @@ export default function CustomProgramScreen() {
                     <ChoiceChip label="Repeat the plan" selected={variety === "repeat"} onPress={() => setVariety("repeat")} colors={colors} />
                     <ChoiceChip label="Rotate variations" selected={variety === "variation"} onPress={() => setVariety("variation")} colors={colors} />
                 </View>
+
+                <Text style={[screenStyles.label, { color: colors.secondaryText }]}>Deload</Text>
+                <View style={screenStyles.chipRow}>
+                    <ChoiceChip label="Deload final week" selected={includeDeload} onPress={() => setIncludeDeload(true)} colors={colors} />
+                    <ChoiceChip label="No deload" selected={!includeDeload} onPress={() => setIncludeDeload(false)} colors={colors} />
+                </View>
+                <Text style={[screenStyles.subtitle, { color: colors.secondaryText }]}>
+                    {draft.sessionsPerWeek} sessions × {draft.blockLengthWeeks} weeks
+                    {includeDeload ? ` · week ${draft.blockLengthWeeks} is a deload` : ""}
+                    {" · "}adapts to your logged effort and rest between sessions
+                </Text>
 
                 <Text style={[screenStyles.label, { color: colors.secondaryText }]}>Progression block</Text>
                 <View style={screenStyles.chipRow}>
