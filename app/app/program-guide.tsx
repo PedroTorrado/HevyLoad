@@ -101,12 +101,13 @@ export default function ProgramGuideScreen() {
     const router = useRouter();
     const colors = useThemeColor();
     const insets = useSafeAreaInsets();
+    const handleBack = () => router.canGoBack() ? router.back() : router.replace("/app/dashboard");
 
     return (
         <View style={[styles.container, { backgroundColor: colors.background }]}>
             <ScrollView contentContainerStyle={[styles.content, { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 32 }]}>
                 <View style={styles.header}>
-                    <Pressable onPress={() => router.back()} style={styles.backButton} accessibilityLabel="Go back">
+                    <Pressable onPress={handleBack} style={styles.backButton} accessibilityLabel="Go back">
                         <Ionicons name="chevron-back" size={24} color={colors.text} />
                     </Pressable>
                     <View style={styles.headerCopy}>

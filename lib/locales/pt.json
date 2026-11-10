@@ -70,7 +70,8 @@
       "stats": {
         "workouts": "Treinos",
         "volume": "Volume Total",
-        "this_week": "Esta Semana"
+        "this_week": "Esta Semana",
+        "last_7_days": "Últimos 7 Dias"
       },
       "import_card": {
         "title": "Importe os Seus Dados",
@@ -98,6 +99,10 @@
         "history": {
           "title": "Histórico Completo",
           "desc": "Navegue por todas as sessões registadas."
+        },
+        "calendar": {
+          "title": "Calendário do Programa",
+          "desc": "Importe um plano de corrida ou força criado por IA"
         }
       },
       "import": {

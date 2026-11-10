@@ -4,7 +4,7 @@
 
 /** Checks a standard email pattern. */
 export function isValidEmail(email: string): boolean {
-    return true///^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email.trim()); //TODO: re-enable this before launch, currently disabled for testing purposes
+    return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email.trim());
 }
 
 /**

@@ -54,6 +54,7 @@ function WorkoutCalendar({
     rollingLabel,
     yearLabel,
 }: WorkoutCalendarProps) {
+    const activityMatrixRef = useRef<ScrollView>(null);
     const [metric, setMetric] = useState<"volume" | "duration">("volume");
     const [selectedPeriod, setSelectedPeriod] = useState<"rolling" | number>("rolling");
     const [selectedDayKey, setSelectedDayKey] = useState<string | null>(null);
@@ -122,6 +123,10 @@ function WorkoutCalendar({
             };
         })
     );
+
+    useEffect(() => {
+        activityMatrixRef.current?.scrollToEnd({ animated: false });
+    }, [selectedPeriod, weeks.length]);
 
     const maxValue = Math.max(...weeks.flat().map((day) => day.value), 1);
     const paces = weeks.flat().map((day) => day.pace).filter((p): p is number => p !== null);
@@ -271,10 +276,13 @@ function WorkoutCalendar({
                         <Text style={[styles.activityDayLabel, styles.activityFridayLabel, { color: colors.secondaryText }]}>{weekdayLabels[2]}</Text>
                     </View>
                     <ScrollView
+                        ref={activityMatrixRef}
                         horizontal
-                        showsHorizontalScrollIndicator={false}
+                        showsHorizontalScrollIndicator
+                        persistentScrollbar
                         style={styles.activityMatrixScroll}
                         contentContainerStyle={styles.activityMatrixContent}
+                        onContentSizeChange={() => activityMatrixRef.current?.scrollToEnd({ animated: false })}
                     >
                         <View style={styles.activityWeeks} {...panResponder.panHandlers}>
                             {weeks.map((week, weekIndex) => {
@@ -414,6 +422,7 @@ export default function Dashboard() {
         totalWorkouts: 0,
         totalVolume: 0,
         workoutsThisWeek: 0,
+        workoutsLast7Days: 0,
         weeklyTonnage: 0,
         powerliftingTotal: 0
     });
@@ -464,10 +473,19 @@ export default function Dashboard() {
                 const diff = now.getDate() - day + (day === 0 ? -6 : 1); // Monday
                 const startOfWeek = new Date(now.setDate(diff));
                 startOfWeek.setHours(0, 0, 0, 0);
+                const startOfLast7Days = new Date();
+                startOfLast7Days.setDate(startOfLast7Days.getDate() - 6);
+                startOfLast7Days.setHours(0, 0, 0, 0);
 
                 thisWeekCount = workouts.filter(w => new Date(w.start_time) >= startOfWeek).length;
+                const last7DaysCount = workouts.filter(w => new Date(w.start_time) >= startOfLast7Days).length;
 
-                setStats(prev => ({ ...prev, totalWorkouts: totalCountRes.count || workouts.length, workoutsThisWeek: thisWeekCount }));
+                setStats(prev => ({
+                    ...prev,
+                    totalWorkouts: totalCountRes.count || workouts.length,
+                    workoutsThisWeek: thisWeekCount,
+                    workoutsLast7Days: last7DaysCount,
+                }));
                 setRecentWorkouts(workouts.slice(0, 3));
             }
 
@@ -652,6 +670,13 @@ export default function Dashboard() {
             color: colors.text,
         },
         {
+            title: t("app.dashboard.modules.calendar.title"),
+            desc: t("app.dashboard.modules.calendar.desc"),
+            route: "/app/program-calendar",
+            icon: "calendar" as const,
+            color: "#A855F7",
+        },
+        {
             title: t("app.dashboard.import_card.title"),
             desc: t("app.dashboard.import_card.subtitle"),
             route: "/app/import",
@@ -712,6 +737,13 @@ export default function Dashboard() {
                         >
                             <Text style={[styles.statValue, { color: colors.text }]}>{stats.workoutsThisWeek}</Text>
                             <Text style={[styles.statLabel, { color: colors.secondaryText }]}>{t("app.dashboard.stats.this_week")}</Text>
+                        </Pressable>
+                        <Pressable
+                            onPress={() => router.push("/app/history" as any)}
+                            style={(state) => [styles.statCard, { backgroundColor: colors.card }, pressFeedback(state)]}
+                        >
+                            <Text style={[styles.statValue, { color: colors.text }]}>{stats.workoutsLast7Days}</Text>
+                            <Text style={[styles.statLabel, { color: colors.secondaryText }]}>{t("app.dashboard.stats.last_7_days")}</Text>
                         </Pressable>
                         <Pressable
                             onPress={() => router.push("/app/analytics" as any)}
@@ -1025,6 +1057,7 @@ const styles = StyleSheet.create({
         alignItems: "center",
         justifyContent: "center",
         paddingRight: 4,
+        paddingBottom: 12,
     },
     activityMatrixScroll: {
         flex: 1,
@@ -1032,7 +1065,7 @@ const styles = StyleSheet.create({
     activityDayLabels: {
         position: "relative",
         width: 28,
-        height: 131,
+        height: 143,
         marginRight: 8,
     },
     activityMonthSpacer: {

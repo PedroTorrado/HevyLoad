@@ -51,6 +51,7 @@ export default function CustomProgramScreen() {
     const [includeDeload, setIncludeDeload] = useState(true);
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const handleBack = () => router.canGoBack() ? router.back() : router.replace("/app/dashboard");
 
     const draft = useMemo(() => generateCustomProgram({
         name,
@@ -85,7 +86,7 @@ export default function CustomProgramScreen() {
         <View style={[screenStyles.container, { backgroundColor: colors.background }]}>
             <ScrollView contentContainerStyle={[screenStyles.content, { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 32 }]}>
                 <View style={screenStyles.header}>
-                    <Pressable onPress={() => router.back()} style={screenStyles.backButton} accessibilityLabel={t("app.suggestions.go_back")}>
+                    <Pressable onPress={handleBack} style={screenStyles.backButton} accessibilityLabel={t("app.suggestions.go_back")}>
                         <Ionicons name="chevron-back" size={24} color={colors.text} />
                     </Pressable>
                     <View>

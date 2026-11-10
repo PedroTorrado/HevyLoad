@@ -52,6 +52,11 @@ export default function Suggestions() {
     const [editing, setEditing] = useState(false);
     const [edits, setEdits] = useState<Record<string, { exerciseId: string; load: string; sets: string; reps: string }>>({});
 
+    function handleBack() {
+        if (router.canGoBack()) router.back();
+        else router.replace("/app/dashboard");
+    }
+
     useEffect(() => {
         (async () => {
             try {
@@ -232,7 +237,7 @@ export default function Suggestions() {
         <View style={[styles.container, { backgroundColor: colors.background }]}>
             <ScrollView contentContainerStyle={[styles.content, { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 32 }]}>
                 <View style={styles.header}>
-                    <Pressable onPress={() => router.back()} style={styles.backButton} accessibilityLabel={t("app.suggestions.go_back")}>
+                    <Pressable onPress={handleBack} style={styles.backButton} accessibilityLabel={t("app.suggestions.go_back")}>
                         <Ionicons name="chevron-back" size={24} color={colors.text} />
                     </Pressable>
                     <View style={styles.headerCopy}>

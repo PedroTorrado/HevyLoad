@@ -70,7 +70,8 @@
       "stats": {
         "workouts": "Workouts",
         "volume": "Total Volume",
-        "this_week": "This Week"
+        "this_week": "This Week",
+        "last_7_days": "Last 7 Days"
       },
       "import_card": {
         "title": "Import Your Data",
@@ -98,6 +99,11 @@
         "history": {
           "title": "Full History",
           "desc": "Browse all your logged sessions."
+        }
+        ,
+        "calendar": {
+          "title": "Program Calendar",
+          "desc": "Import an LLM-built running or strength plan"
         }
       },
       "import": {

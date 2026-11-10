@@ -34,7 +34,10 @@ export default function Import() {
     const { t } = useTranslation();
     const insets = useSafeAreaInsets();
     const colors = useThemeColor();
-    const k = (key: string, opts?: Record<string, unknown>) => t(`app.dashboard.import.${key}`, opts as any);
+    const translate = (key: string, opts?: Record<string, unknown>): string =>
+        String(t(key, opts as any));
+    const k = (key: string, opts?: Record<string, unknown>) =>
+        translate(`app.dashboard.import.${key}`, opts);
 
     const [loading, setLoading] = useState(false);
     const [importText, setImportText] = useState("");
@@ -414,7 +417,7 @@ export default function Import() {
             title,
             message,
             [
-                { text: t("common.cancel"), style: "cancel" },
+                { text: translate("common.cancel"), style: "cancel" },
                 { 
                     text: k("delete_everything"), 
                     style: "destructive",
@@ -444,7 +447,7 @@ export default function Import() {
 
             const d3 = parse(cleanStr, "d MMM yyyy, HH:mm", new Date());
             if (!isNaN(d3.getTime())) return d3;
-        } catch (e) {
+        } catch {
             // Fall through to native Date
         }
 
@@ -480,7 +483,7 @@ export default function Import() {
         <View style={[styles.container, { backgroundColor: colors.background }]}>
             {/* Header */}
             <View style={[styles.header, { paddingTop: insets.top + 10, borderBottomColor: colors.border }]}>
-                <Pressable onPress={handleBack} style={styles.backBtn} accessibilityLabel={t("common.back")}>
+                <Pressable onPress={handleBack} style={styles.backBtn} accessibilityLabel={translate("common.back")}>
                     <Ionicons name="chevron-back" size={28} color={colors.text} />
                 </Pressable>
                 <View style={styles.headerInfo}>
@@ -634,7 +637,7 @@ export default function Import() {
                         style={(s) => [styles.dangerBtn, { borderColor: colors.error }, pressFeedback(s), loading && { opacity: 0.4 }]}
                     >
                         <Ionicons name="trash-outline" size={16} color={colors.error} />
-                        <Text style={[styles.dangerBtnText, { color: colors.error }]}>{t("common.delete")}</Text>
+                        <Text style={[styles.dangerBtnText, { color: colors.error }]}>{translate("common.delete")}</Text>
                     </Pressable>
                 </View>
             </ScrollView>
