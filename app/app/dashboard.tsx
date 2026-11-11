@@ -8,8 +8,16 @@ import { supabase } from "../../lib/supabase";
 import { useThemeColor } from "../../lib/theme";
 import { usePreferences } from "../../lib/preferences";
 import { getLocalYYYYMMDD } from "../../lib/date-utils";
+import type { CalendarSessionDetails } from "../../lib/program-calendar";
 
 type PressState = { pressed: boolean; hovered?: boolean };
+type TodayWorkout = {
+    id: string;
+    title: string;
+    mode: string;
+    status: "planned" | "completed" | "skipped";
+    details: CalendarSessionDetails;
+};
 
 /** Shared press / hover feedback so every tappable dashboard card feels interactive. */
 const pressFeedback = ({ pressed, hovered }: PressState) => ({
@@ -430,6 +438,7 @@ export default function Dashboard() {
     const [activityWorkouts, setActivityWorkouts] = useState<{ id: string; start_time: string; title?: string | null; volume: number; durationMinutes: number }[]>([]);
     const [sbdLifts, setSbdLifts] = useState<{name: string, value: number, id: string, type: string}[]>([]);
     const [otherLifts, setOtherLifts] = useState<{name: string, value: number, id: string}[]>([]);
+    const [todayWorkouts, setTodayWorkouts] = useState<TodayWorkout[]>([]);
 
     const firstName = userName.split(" ")[0] || "User";
 
@@ -453,12 +462,20 @@ export default function Dashboard() {
             if (!user) return;
 
             // 1. Fetch Profile, Workouts, and Exercises
-            const [profileRes, workoutsRes, exercisesRes, totalCountRes] = await Promise.all([
+            const [profileRes, workoutsRes, exercisesRes, totalCountRes, todaySessionsRes] = await Promise.all([
                 supabase.from("profiles").select("full_name, avatar_url, featured_exercise_ids").eq("id", user.id).single(),
                 supabase.from("workouts").select("id, start_time, end_time, title, sets(weight_kg, reps, exercise_id, duration_s, distance_km)").eq("user_id", user.id).order("start_time", { ascending: false }).limit(1000),
                 supabase.from("exercises").select("id, name").eq("user_id", user.id),
-                supabase.from("workouts").select("id", { count: 'exact', head: true }).eq("user_id", user.id)
+                supabase.from("workouts").select("id", { count: 'exact', head: true }).eq("user_id", user.id),
+                supabase.from("calendar_sessions").select("id, title, mode, status, details").eq("user_id", user.id).eq("session_date", getLocalYYYYMMDD()).order("title")
             ]);
+            setTodayWorkouts(todaySessionsRes.error ? [] : (todaySessionsRes.data ?? []).map((session) => ({
+                id: session.id,
+                title: session.title,
+                mode: session.mode,
+                status: session.status,
+                details: (session.details ?? {}) as CalendarSessionDetails,
+            })));
 
             if (profileRes.data) {
                 setUserName(profileRes.data.full_name || user.user_metadata?.full_name || "User");
@@ -685,6 +702,46 @@ export default function Dashboard() {
         },
     ];
 
+    function renderTodayWorkout(workout: TodayWorkout) {
+        const exercises = workout.details.exercises ?? [];
+        const icon = workout.mode === "running" ? "walk-outline" : workout.mode === "weight_training" ? "barbell-outline" : "fitness-outline";
+        return (
+            <Pressable
+                key={workout.id}
+                onPress={() => router.push("/app/program-calendar" as any)}
+                style={(state) => [styles.todayWorkoutCard, { backgroundColor: colors.secondaryBackground, borderColor: colors.border }, pressFeedback(state)]}
+            >
+                <View style={[styles.todayWorkoutIcon, { backgroundColor: workout.status === "completed" ? colors.success : colors.tint }]}>
+                    <Ionicons name={icon} size={19} color="#fff" />
+                </View>
+                <View style={styles.todayWorkoutCopy}>
+                    <Text style={[styles.todayWorkoutTitle, { color: colors.text }]}>{workout.title}</Text>
+                    <Text style={[styles.todayWorkoutMeta, { color: colors.secondaryText }]}>
+                        {workout.mode.replace("_", " ")} · {workout.status}
+                    </Text>
+                    {workout.details.distance_km || workout.details.duration_minutes ? (
+                        <Text style={[styles.todayWorkoutSummary, { color: colors.text }]}>
+                            {workout.details.distance_km ? `${workout.details.distance_km} km` : ""}
+                            {workout.details.duration_minutes ? `${workout.details.distance_km ? " · " : ""}${workout.details.duration_minutes} min` : ""}
+                            {workout.details.pace ? ` · ${workout.details.pace}` : ""}
+                        </Text>
+                    ) : null}
+                    {exercises.slice(0, 3).map((exercise, index) => (
+                        <View key={`${exercise.name}-${index}`} style={styles.todayExerciseRow}>
+                            <Text style={[styles.todayExerciseName, { color: colors.text }]} numberOfLines={1}>{exercise.name}</Text>
+                            <Text style={[styles.todayExercisePrescription, { color: colors.secondaryText }]}>
+                                {exercise.sets ?? "-"} × {exercise.reps ?? "-"}
+                            </Text>
+                            <Text style={[styles.todayExerciseLoad, { color: colors.tint }]}>{exercise.load || "—"}</Text>
+                        </View>
+                    ))}
+                    {exercises.length > 3 ? <Text style={[styles.todayMore, { color: colors.tint }]}>+{exercises.length - 3} more exercises</Text> : null}
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={colors.secondaryText} />
+            </Pressable>
+        );
+    }
+
     return (
         <View style={[styles.container, { backgroundColor: colors.background }]}>
             <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
@@ -752,6 +809,32 @@ export default function Dashboard() {
                             <Text style={[styles.statValue, { color: colors.text }]}>{stats.weeklyTonnage.toLocaleString()} kg</Text>
                             <Text style={[styles.statLabel, { color: colors.secondaryText }]}>{t("app.dashboard.weekly_tonnage")}</Text>
                         </Pressable>
+                    </View>
+
+                    <View style={styles.todaySection}>
+                        <View style={styles.todayHeader}>
+                            <View style={styles.todayHeadingCopy}>
+                                <Text style={[styles.sectionTitle, { color: colors.accentText, marginBottom: 0 }]}>Today&apos;s workout</Text>
+                                <Text style={[styles.todayDate, { color: colors.secondaryText }]}>
+                                    {new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}
+                                </Text>
+                            </View>
+                            <Pressable onPress={() => router.push("/app/program-calendar" as any)} style={(state) => [styles.todayCalendarButton, { backgroundColor: colors.tint + "14" }, pressFeedback(state)]}>
+                                <Ionicons name="calendar-outline" size={17} color={colors.tint} />
+                            </Pressable>
+                        </View>
+                        {todayWorkouts.length ? todayWorkouts.map(renderTodayWorkout) : (
+                            <Pressable onPress={() => router.push("/app/program-calendar" as any)} style={(state) => [styles.todayEmpty, { backgroundColor: colors.card, borderColor: colors.border }, pressFeedback(state)]}>
+                                <View style={[styles.todayEmptyIcon, { backgroundColor: colors.tint + "14" }]}>
+                                    <Ionicons name="calendar-outline" size={21} color={colors.tint} />
+                                </View>
+                                <View style={{ flex: 1 }}>
+                                    <Text style={[styles.todayEmptyTitle, { color: colors.text }]}>No workout scheduled</Text>
+                                    <Text style={[styles.todayEmptyText, { color: colors.secondaryText }]}>Open Program Calendar to plan today&apos;s session.</Text>
+                                </View>
+                                <Ionicons name="chevron-forward" size={18} color={colors.secondaryText} />
+                            </Pressable>
+                        )}
                     </View>
 
                     {/* The Big 3 Showdown */}
@@ -963,6 +1046,26 @@ const styles = StyleSheet.create({
     },
     statValue: { fontSize: 18, fontWeight: "900", fontFamily: "System", letterSpacing: -0.5 },
     statLabel: { fontSize: 9, fontWeight: "800", marginTop: 4, textTransform: "uppercase", fontFamily: "System", opacity: 0.8 },
+    todaySection: { gap: 12, marginBottom: 30 },
+    todayHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+    todayHeadingCopy: { gap: 5 },
+    todayDate: { fontSize: 13 },
+    todayCalendarButton: { width: 40, height: 40, borderRadius: 13, alignItems: "center", justifyContent: "center" },
+    todayWorkoutCard: { flexDirection: "row", alignItems: "flex-start", gap: 12, padding: 16, borderRadius: 18, borderWidth: 1, borderLeftWidth: 3, borderLeftColor: "#007AFF", shadowColor: "#000", shadowOpacity: 0.12, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
+    todayWorkoutIcon: { width: 40, height: 40, borderRadius: 13, alignItems: "center", justifyContent: "center" },
+    todayWorkoutCopy: { flex: 1, gap: 6 },
+    todayWorkoutTitle: { fontSize: 15, fontWeight: "800" },
+    todayWorkoutMeta: { fontSize: 11, textTransform: "capitalize" },
+    todayWorkoutSummary: { fontSize: 13, fontWeight: "800", paddingTop: 1 },
+    todayExerciseRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingTop: 5, borderTopWidth: 1, borderTopColor: "rgba(128,128,128,0.16)" },
+    todayExerciseName: { flex: 1, fontSize: 12, fontWeight: "700" },
+    todayExercisePrescription: { fontSize: 11 },
+    todayExerciseLoad: { minWidth: 52, fontSize: 12, fontWeight: "900", textAlign: "right" },
+    todayMore: { fontSize: 11, fontWeight: "800", paddingTop: 2 },
+    todayEmpty: { flexDirection: "row", alignItems: "center", gap: 11, padding: 14, borderRadius: 16, borderWidth: 1 },
+    todayEmptyIcon: { width: 38, height: 38, borderRadius: 12, alignItems: "center", justifyContent: "center" },
+    todayEmptyTitle: { fontSize: 14, fontWeight: "800" },
+    todayEmptyText: { fontSize: 12, marginTop: 3 },
 
     totalBanner: {
         flexDirection: "row",
