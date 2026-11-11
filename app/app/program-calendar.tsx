@@ -460,6 +460,30 @@ export default function ProgramCalendar() {
         setPrompt(`Update only these sessions in the existing program. Preserve all other sessions.\n\nReturn the same JSON session shape.\n\n${JSON.stringify(values.map((session) => ({ date: session.date, mode: session.mode, title: session.title, details: session.details })), null, 2)}`);
     }
 
+    function exportChangedSessionsJson() {
+        const values = Object.values(changedSessions);
+        if (!values.length) {
+            setNotice("Edit a session first to export workout changes.");
+            return;
+        }
+
+        const json = JSON.stringify({
+            type: "hevyload_workout_changes",
+            instructions: "Apply these updates to the existing calendar sessions. Preserve all other sessions.",
+            changes: values.map((session) => ({
+                session_id: session.id,
+                program_id: session.program_id,
+                date: session.date,
+                mode: session.mode,
+                title: session.title,
+                details: session.details ?? {},
+            })),
+        }, null, 2);
+        setExportedJson(json);
+        downloadJson(json, "hevyload-workout-changes");
+        setNotice(`Exported ${values.length} workout change${values.length === 1 ? "" : "s"} as JSON.`);
+    }
+
     function beginEdit(session: CalendarSession) {
         setEditingSessionId(session.id);
         setEditingTitle(session.title);
@@ -539,12 +563,17 @@ export default function ProgramCalendar() {
     function renderSetup() {
         return (
             <View style={[styles.setupPanel, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                <View style={styles.setupHeading}>
-                    <View style={[styles.setupIcon, { backgroundColor: colors.tint }]}><Ionicons name="sparkles" size={20} color="#fff" /></View>
-                    <View style={{ flex: 1 }}>
-                        <Text style={[styles.setupTitle, { color: colors.text }]}>Build your training plan</Text>
-                        <Text style={[styles.helper, { color: colors.secondaryText }]}>Create a copy-ready prompt tailored to your history and goals.</Text>
+                <View style={styles.panelHeader}>
+                    <View style={styles.setupHeading}>
+                        <View style={[styles.setupIcon, { backgroundColor: colors.tint }]}><Ionicons name="sparkles" size={20} color="#fff" /></View>
+                        <View style={{ flex: 1 }}>
+                            <Text style={[styles.setupTitle, { color: colors.text }]}>Build your training plan</Text>
+                            <Text style={[styles.helper, { color: colors.secondaryText }]}>Create a copy-ready prompt tailored to your history and goals.</Text>
+                        </View>
                     </View>
+                    <Pressable onPress={() => setShowSetup(false)} style={styles.closeButton} accessibilityLabel="Close new prompt">
+                        <Ionicons name="close" size={20} color={colors.secondaryText} />
+                    </Pressable>
                 </View>
                 <View style={[styles.privacyNote, { backgroundColor: colors.secondaryBackground }]}><Ionicons name="shield-checkmark-outline" size={16} color={colors.tint} /><Text style={[styles.privacyText, { color: colors.secondaryText }]}>Your workout history is summarized locally. No LLM is called by the app.</Text></View>
                 <Text style={[styles.formSectionTitle, { color: colors.text }]}>Training focus</Text>
@@ -584,15 +613,24 @@ export default function ProgramCalendar() {
     function renderSession(session: DisplaySession) {
         const details = session.details ?? {};
         const isEditing = editingSessionId === session.id;
+        const exercises = details.exercises ?? [];
+        const sessionIcon = session.mode === "running"
+            ? "walk-outline"
+            : session.mode === "weight_training"
+                ? "barbell-outline"
+                : "fitness-outline";
         return (
             <View key={session.id} style={[styles.sessionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
                 <View style={styles.sessionHeader}>
-                <View style={{ flex: 1 }}>
-                    {isEditing ? (
-                        <TextInput value={editingTitle} onChangeText={setEditingTitle} autoFocus style={[styles.editInput, { color: colors.text, borderColor: colors.border }]} />
-                    ) : <Text style={[styles.sessionTitle, { color: colors.text }]}>{session.title}</Text>}
-                    <Text style={[styles.meta, { color: colors.secondaryText }]}>{session.mode.replace("_", " ")} · {session.status}{session.program_name ? ` · ${session.program_name}` : ""}</Text>
-                </View>
+                    <View style={[styles.sessionIcon, { backgroundColor: session.status === "completed" ? colors.success : colors.tint }]}>
+                        <Ionicons name={sessionIcon} size={19} color="#fff" />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                        {isEditing ? (
+                            <TextInput value={editingTitle} onChangeText={setEditingTitle} autoFocus style={[styles.editInput, { color: colors.text, borderColor: colors.border }]} />
+                        ) : <Text style={[styles.sessionTitle, { color: colors.text }]}>{session.title}</Text>}
+                        <Text style={[styles.meta, { color: colors.secondaryText }]}>{formatModeLabel(session.mode)} · {session.status}{session.program_name ? ` · ${session.program_name}` : ""}</Text>
+                    </View>
                     <Ionicons name={session.status === "completed" ? "checkmark-circle" : "ellipse-outline"} size={24} color={session.status === "completed" ? colors.success : colors.secondaryText} />
                 </View>
                 {isEditing ? (
@@ -613,9 +651,51 @@ export default function ProgramCalendar() {
                     </View>
                 ) : (
                     <>
-                        {details.distance_km ? <Text style={[styles.detail, { color: colors.text }]}>{details.distance_km} km {details.pace ? `· ${details.pace}` : ""}{details.duration_minutes ? ` · ${details.duration_minutes} min` : ""}</Text> : null}
-                        {details.duration_minutes && !details.distance_km ? <Text style={[styles.detail, { color: colors.text }]}>{details.duration_minutes} min{details.pace ? ` · ${details.pace}` : ""}</Text> : null}
-                        {details.exercises?.map((exercise) => <Text key={exercise.name} style={[styles.detail, { color: colors.text }]}>{exercise.name}: {exercise.sets ?? "-"} × {exercise.reps ?? "-"} {exercise.load ? `· ${exercise.load}` : ""}</Text>)}
+                        {details.distance_km || details.duration_minutes || details.pace ? (
+                            <View style={[styles.activitySummary, { backgroundColor: colors.secondaryBackground }]}>
+                                <Ionicons name={session.mode === "running" ? "speedometer-outline" : "timer-outline"} size={17} color={colors.tint} />
+                                <Text style={[styles.activitySummaryText, { color: colors.text }]}>
+                                    {details.distance_km ? `${details.distance_km} km` : ""}
+                                    {details.duration_minutes ? `${details.distance_km ? " · " : ""}${details.duration_minutes} min` : ""}
+                                    {details.pace ? ` · ${details.pace}` : ""}
+                                </Text>
+                            </View>
+                        ) : null}
+                        {exercises.length ? (
+                            <View style={styles.exerciseList}>
+                                <View style={styles.exerciseListHeader}>
+                                    <Text style={[styles.exerciseListTitle, { color: colors.text }]}>Exercises</Text>
+                                    <Text style={[styles.exerciseCount, { color: colors.secondaryText }]}>{exercises.length} movement{exercises.length === 1 ? "" : "s"}</Text>
+                                </View>
+                                {exercises.map((exercise, index) => (
+                                    <View key={`${exercise.name}-${index}`} style={[styles.exerciseCard, { backgroundColor: colors.secondaryBackground, borderColor: colors.border }]}>
+                                        <View style={[styles.exerciseNumber, { backgroundColor: colors.tint + "1A" }]}>
+                                            <Text style={[styles.exerciseNumberText, { color: colors.tint }]}>{String(index + 1).padStart(2, "0")}</Text>
+                                        </View>
+                                        <View style={styles.exerciseCopy}>
+                                            <Text style={[styles.exerciseName, { color: colors.text }]}>{exercise.name}</Text>
+                                            <View style={styles.prescriptionRow}>
+                                                <View style={[styles.prescriptionPill, { backgroundColor: colors.card }]}>
+                                                    <Text style={[styles.prescriptionText, { color: colors.text }]}>{exercise.sets ?? "-"} sets</Text>
+                                                </View>
+                                                <View style={[styles.prescriptionPill, { backgroundColor: colors.card }]}>
+                                                    <Text style={[styles.prescriptionText, { color: colors.text }]}>{exercise.reps ?? "-"} reps</Text>
+                                                </View>
+                                                {exercise.rpe !== undefined ? (
+                                                    <View style={[styles.prescriptionPill, { backgroundColor: colors.card }]}>
+                                                        <Text style={[styles.prescriptionText, { color: colors.secondaryText }]}>RPE {exercise.rpe}</Text>
+                                                    </View>
+                                                ) : null}
+                                            </View>
+                                        </View>
+                                        <View style={styles.loadBlock}>
+                                            <Text style={[styles.loadLabel, { color: colors.secondaryText }]}>LOAD</Text>
+                                            <Text style={[styles.loadValue, { color: colors.tint }]}>{exercise.load || "—"}</Text>
+                                        </View>
+                                    </View>
+                                ))}
+                            </View>
+                        ) : null}
                         {details.warmup ? <Text style={[styles.detail, { color: colors.secondaryText }]}>Warm-up: {details.warmup}</Text> : null}
                         {details.cooldown ? <Text style={[styles.detail, { color: colors.secondaryText }]}>Cool-down: {details.cooldown}</Text> : null}
                         {details.notes ? <Text style={[styles.detail, { color: colors.secondaryText }]}>Notes: {details.notes}</Text> : null}
@@ -647,7 +727,17 @@ export default function ProgramCalendar() {
                     <Pressable style={[styles.secondaryButton, { borderColor: colors.border }]} onPress={() => setShowImport((value) => !value)}><Text style={{ color: colors.text }}>Import JSON</Text></Pressable>
                     {programs.length ? <Pressable style={[styles.secondaryButton, { borderColor: colors.border }]} onPress={exportAllPrograms}><Text style={{ color: colors.text }}>Export JSON</Text></Pressable> : null}
                     <Pressable style={[styles.helpButton, { borderColor: colors.border, backgroundColor: colors.secondaryBackground }]} onPress={() => setShowHelp((value) => !value)} accessibilityLabel="Explain Program Calendar"><Ionicons name="help" size={16} color={colors.tint} /></Pressable>
-                    {Object.keys(changedSessions).length ? <Pressable style={[styles.secondaryButton, { borderColor: colors.border }]} onPress={exportChangedSessions}><Text style={{ color: colors.text }}>Export edits</Text></Pressable> : null}
+                    {Object.keys(changedSessions).length ? (
+                        <>
+                            <Pressable style={[styles.secondaryButton, { borderColor: colors.border }]} onPress={exportChangedSessionsJson}>
+                                <Ionicons name="download-outline" size={15} color={colors.tint} />
+                                <Text style={{ color: colors.text }}>Export changes JSON</Text>
+                            </Pressable>
+                            <Pressable style={[styles.secondaryButton, { borderColor: colors.border }]} onPress={exportChangedSessions}>
+                                <Text style={{ color: colors.text }}>Create edit prompt</Text>
+                            </Pressable>
+                        </>
+                    ) : null}
                 </View>
                 {showHelp ? <View style={[styles.helpPanel, { backgroundColor: colors.card, borderColor: colors.border }]}>
                     <View style={styles.panelHeader}><Text style={[styles.panelTitle, { color: colors.text }]}>How Program Calendar works</Text><Pressable onPress={() => setShowHelp(false)} accessibilityLabel="Close help"><Ionicons name="close" size={20} color={colors.secondaryText} /></Pressable></View>
@@ -659,10 +749,10 @@ export default function ProgramCalendar() {
                     <Text style={[styles.helpFooter, { color: colors.secondaryText }]}>You can run Running, Weight Training, Combined, and Other programs at the same time. Export JSON anytime to keep a backup.</Text>
                 </View> : null}
                 {showSetup ? renderSetup() : null}
-                {showImport ? <View id="program-calendar-import-dropzone" style={[styles.panel, { backgroundColor: colors.card, borderColor: draggingFile ? colors.tint : colors.border }]}><Text style={[styles.panelTitle, { color: colors.text }]}>Import a program</Text><Text style={[styles.helper, { color: colors.secondaryText }]}>Drop a JSON file here, or choose one from your device. You can also paste JSON below.</Text><Pressable style={[styles.secondaryButton, { borderColor: colors.border }]} onPress={chooseImportFile}><Text style={{ color: colors.text }}>Choose JSON file</Text></Pressable><TextInput multiline value={response} onChangeText={setResponse} placeholder="Paste JSON here..." placeholderTextColor={colors.secondaryText} style={[styles.largeInput, { color: colors.text, borderColor: colors.border }]} /><Pressable style={[styles.primaryButton, { backgroundColor: colors.tint }]} onPress={importResponse}><Text style={styles.primaryText}>{busy ? "Importing..." : "Import plan"}</Text></Pressable></View> : null}
+                {showImport ? <View id="program-calendar-import-dropzone" style={[styles.panel, { backgroundColor: colors.card, borderColor: draggingFile ? colors.tint : colors.border }]}><View style={styles.panelHeader}><Text style={[styles.panelTitle, { color: colors.text }]}>Import a program</Text><Pressable onPress={() => setShowImport(false)} style={styles.closeButton} accessibilityLabel="Close import"><Ionicons name="close" size={20} color={colors.secondaryText} /></Pressable></View><Text style={[styles.helper, { color: colors.secondaryText }]}>Drop a JSON file here, or choose one from your device. You can also paste JSON below.</Text><Pressable style={[styles.secondaryButton, { borderColor: colors.border }]} onPress={chooseImportFile}><Text style={{ color: colors.text }}>Choose JSON file</Text></Pressable><TextInput multiline value={response} onChangeText={setResponse} placeholder="Paste JSON here..." placeholderTextColor={colors.secondaryText} style={[styles.largeInput, { color: colors.text, borderColor: colors.border }]} /><Pressable style={[styles.primaryButton, { backgroundColor: colors.tint }]} onPress={importResponse}><Text style={styles.primaryText}>{busy ? "Importing..." : "Import plan"}</Text></Pressable></View> : null}
                 {pendingImport ? <View style={[styles.conflictPanel, { backgroundColor: colors.card, borderColor: colors.tint }]}><Text style={[styles.panelTitle, { color: colors.text }]}>Similar program already exists</Text><Text style={[styles.helper, { color: colors.secondaryText }]}>&quot;{pendingImport.duplicate.name}&quot; starts on {pendingImport.duplicate.start_date}. What would you like to do with &quot;{pendingImport.program.name}&quot;?</Text><View style={styles.actionRow}><Pressable onPress={() => resolveImportConflict("replace")} disabled={busy}><Text style={{ color: colors.error, fontWeight: "800" }}>Replace current</Text></Pressable><Pressable onPress={() => resolveImportConflict("keep")} disabled={busy}><Text style={{ color: colors.tint, fontWeight: "800" }}>Keep both</Text></Pressable><Pressable onPress={() => resolveImportConflict("cancel")} disabled={busy}><Text style={{ color: colors.secondaryText, fontWeight: "700" }}>Cancel</Text></Pressable></View></View> : null}
-                {prompt ? <View style={[styles.panel, { backgroundColor: colors.card, borderColor: colors.border }]}><View style={styles.panelHeader}><Text style={[styles.panelTitle, { color: colors.text }]}>Copy-ready prompt</Text><Pressable onPress={copyPrompt} style={[styles.secondaryButton, { borderColor: colors.border }]} accessibilityLabel="Copy prompt"><Text style={{ color: colors.text }}>Copy</Text></Pressable></View><TextInput multiline editable={false} selectTextOnFocus value={prompt} style={[styles.largeInput, { color: colors.text, borderColor: colors.border }]} /></View> : null}
-                {exportedJson ? <View style={[styles.panel, { backgroundColor: colors.card, borderColor: colors.border }]}><View style={styles.panelHeader}><Text style={[styles.panelTitle, { color: colors.text }]}>Exported JSON</Text><Pressable onPress={() => setExportedJson("")}><Text style={{ color: colors.secondaryText, fontWeight: "700" }}>Close</Text></Pressable></View><Text style={[styles.helper, { color: colors.secondaryText }]}>Select and copy this JSON to save or reuse the plan.</Text><TextInput multiline editable={false} selectTextOnFocus value={exportedJson} style={[styles.exportInput, { color: colors.text, borderColor: colors.border }]} /></View> : null}
+                {prompt ? <View style={[styles.panel, { backgroundColor: colors.card, borderColor: colors.border }]}><View style={styles.panelHeader}><Text style={[styles.panelTitle, { color: colors.text }]}>Copy-ready prompt</Text><View style={styles.panelActions}><Pressable onPress={copyPrompt} style={[styles.secondaryButton, { borderColor: colors.border }]} accessibilityLabel="Copy prompt"><Text style={{ color: colors.text }}>Copy</Text></Pressable><Pressable onPress={() => setPrompt("")} style={styles.closeButton} accessibilityLabel="Close prompt"><Ionicons name="close" size={20} color={colors.secondaryText} /></Pressable></View></View><TextInput multiline editable={false} selectTextOnFocus value={prompt} style={[styles.largeInput, { color: colors.text, borderColor: colors.border }]} /></View> : null}
+                {exportedJson ? <View style={[styles.panel, { backgroundColor: colors.card, borderColor: colors.border }]}><View style={styles.panelHeader}><Text style={[styles.panelTitle, { color: colors.text }]}>Exported JSON</Text><Pressable onPress={() => setExportedJson("")} style={styles.closeButton} accessibilityLabel="Close exported JSON"><Ionicons name="close" size={20} color={colors.secondaryText} /></Pressable></View><Text style={[styles.helper, { color: colors.secondaryText }]}>Select and copy this JSON to save or reuse the plan.</Text><TextInput multiline editable={false} selectTextOnFocus value={exportedJson} style={[styles.exportInput, { color: colors.text, borderColor: colors.border }]} /></View> : null}
                 {loading ? <ActivityIndicator color={colors.tint} /> : null}
                 <View style={[styles.calendarCard, { backgroundColor: colors.secondaryBackground, borderColor: colors.border }]}>
                     <View style={styles.monthHeader}><Pressable style={[styles.monthButton, { backgroundColor: colors.secondary }]} onPress={() => shiftMonth(-1)}><Ionicons name="chevron-back" size={20} color={colors.text} /></Pressable><Text style={[styles.monthTitle, { color: colors.text }]}>{format(month, "MMMM yyyy")}</Text><Pressable style={[styles.monthButton, { backgroundColor: colors.secondary }]} onPress={() => shiftMonth(1)}><Ionicons name="chevron-forward" size={20} color={colors.text} /></Pressable></View>
@@ -727,7 +817,7 @@ const styles = StyleSheet.create({
     primaryButton: { paddingHorizontal: 14, paddingVertical: 11, borderRadius: 10, alignItems: "center" },
     primaryText: { color: "#fff", fontWeight: "800" },
     buildButton: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, paddingHorizontal: 14, paddingVertical: 14, borderRadius: 12, marginTop: 2 },
-    secondaryButton: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10, borderWidth: 1, alignItems: "center" },
+    secondaryButton: { flexDirection: "row", gap: 6, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10, borderWidth: 1, alignItems: "center" },
     panel: { padding: 14, borderRadius: 14, borderWidth: 1, gap: 10 },
     setupPanel: { padding: 20, borderRadius: 20, borderWidth: 1, gap: 16 },
     setupHeading: { flexDirection: "row", alignItems: "center", gap: 12 },
@@ -739,6 +829,8 @@ const styles = StyleSheet.create({
     formGrid: { gap: 10 },
     formField: { gap: 5 },
     panelHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+    panelActions: { flexDirection: "row", alignItems: "center", gap: 8 },
+    closeButton: { width: 34, height: 34, borderRadius: 10, alignItems: "center", justifyContent: "center" },
     helpPanel: { padding: 18, borderRadius: 16, borderWidth: 1, gap: 14 },
     helpIntro: { lineHeight: 20 },
     helpStep: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
@@ -792,6 +884,7 @@ const styles = StyleSheet.create({
     selectedDate: { fontSize: 20, fontWeight: "800", marginTop: -8 },
     sessionCard: { padding: 18, borderRadius: 18, borderWidth: 1, gap: 8 },
     sessionHeader: { flexDirection: "row", alignItems: "center", gap: 10 },
+    sessionIcon: { width: 38, height: 38, borderRadius: 12, alignItems: "center", justifyContent: "center" },
     sessionTitle: { fontSize: 16, fontWeight: "800" },
     editInput: { borderWidth: 1, borderRadius: 8, padding: 8, fontSize: 16, fontWeight: "700" },
     editFields: { gap: 8 },
@@ -802,6 +895,23 @@ const styles = StyleSheet.create({
     exerciseField: { flex: 1, minWidth: 70, gap: 4 },
     smallEditInput: { width: "100%", borderWidth: 1, borderRadius: 8, padding: 8 },
     meta: { fontSize: 12, textTransform: "capitalize" },
+    activitySummary: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 11 },
+    activitySummaryText: { fontSize: 14, fontWeight: "700" },
+    exerciseList: { gap: 8, marginTop: 4 },
+    exerciseListHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingBottom: 2 },
+    exerciseListTitle: { fontSize: 14, fontWeight: "800" },
+    exerciseCount: { fontSize: 12 },
+    exerciseCard: { flexDirection: "row", alignItems: "center", gap: 10, padding: 11, borderRadius: 13, borderWidth: 1 },
+    exerciseNumber: { width: 32, height: 32, borderRadius: 10, alignItems: "center", justifyContent: "center" },
+    exerciseNumberText: { fontSize: 11, fontWeight: "800" },
+    exerciseCopy: { flex: 1, gap: 6 },
+    exerciseName: { fontSize: 14, fontWeight: "800" },
+    prescriptionRow: { flexDirection: "row", gap: 5, flexWrap: "wrap" },
+    prescriptionPill: { paddingHorizontal: 7, paddingVertical: 4, borderRadius: 6 },
+    prescriptionText: { fontSize: 11, fontWeight: "700" },
+    loadBlock: { minWidth: 64, alignItems: "flex-end", paddingLeft: 4 },
+    loadLabel: { fontSize: 9, fontWeight: "800", letterSpacing: 0.8 },
+    loadValue: { fontSize: 15, fontWeight: "900", marginTop: 2, textAlign: "right" },
     detail: { lineHeight: 20 },
     actionRow: { flexDirection: "row", gap: 18, paddingTop: 6 },
     empty: { textAlign: "center", paddingVertical: 20 },
