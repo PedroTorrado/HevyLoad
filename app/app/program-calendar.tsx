@@ -15,6 +15,7 @@ import {
     CalendarMode,
     CalendarProgram,
     CalendarSession,
+    CalendarSuggestion,
     ImportedCalendarProgram,
     extractJsonFromResponse,
     formatPace,
@@ -55,12 +56,134 @@ function formatModeLabel(mode: string) {
         .join(" ");
 }
 
+function formatChangeLabel(value: string) {
+    return value
+        .replace(/_/g, " ")
+        .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function formatSuggestionChanges(changes: Record<string, unknown>): string[] {
+    const lines: string[] = [];
+    const sessions = Array.isArray(changes.sessions) ? changes.sessions : [];
+    sessions.forEach((value) => {
+        if (!value || typeof value !== "object") return;
+        const session = value as Record<string, unknown>;
+        const dates = Array.isArray(session.dates)
+            ? session.dates.filter((date): date is string => typeof date === "string")
+            : [];
+        const heading = [
+            dates.length ? dates.join(", ") : "Program sessions",
+            typeof session.title === "string" ? session.title : "",
+        ].filter(Boolean).join(" — ");
+        if (heading) lines.push(heading);
+        if (typeof session.details === "string") {
+            lines.push(session.details);
+        } else if (session.details && typeof session.details === "object") {
+            Object.entries(session.details as Record<string, unknown>).forEach(([key, value]) => {
+                if (key === "exercises" && Array.isArray(value)) {
+                    value.forEach((exercise) => {
+                        if (!exercise || typeof exercise !== "object") return;
+                        const item = exercise as Record<string, unknown>;
+                        const prescription = [
+                            item.sets !== undefined ? `${item.sets} sets` : "",
+                            item.reps !== undefined ? `${item.reps} reps` : "",
+                            item.load !== undefined ? String(item.load) : "",
+                            item.rpe !== undefined ? `RPE ${item.rpe}` : "",
+                        ].filter(Boolean).join(" · ");
+                        lines.push(`${String(item.name ?? "Exercise")}${prescription ? `: ${prescription}` : ""}`);
+                    });
+                } else if (value !== null && value !== undefined && value !== "") {
+                    lines.push(`${formatChangeLabel(key)}: ${String(value)}`);
+                }
+            });
+        }
+    });
+    if (!lines.length) {
+        Object.entries(changes)
+            .filter(([key]) => key !== "scope" && key !== "sessions")
+            .forEach(([key, value]) => {
+                if (value !== null && value !== undefined && value !== "") {
+                    lines.push(`${formatChangeLabel(key)}: ${typeof value === "object" ? JSON.stringify(value) : String(value)}`);
+                }
+            });
+    }
+    return lines;
+}
+
+function getSuggestionDates(changes: Record<string, unknown>): string[] {
+    const dates = new Set<string>();
+    if (typeof changes.date === "string") dates.add(changes.date);
+    if (Array.isArray(changes.sessions)) {
+        changes.sessions.forEach((value) => {
+            if (!value || typeof value !== "object") return;
+            const session = value as Record<string, unknown>;
+            if (Array.isArray(session.dates)) {
+                session.dates.filter((date): date is string => typeof date === "string").forEach((date) => dates.add(date));
+            }
+        });
+    }
+    return [...dates];
+}
+
+function mergeSuggestedDetails(current: CalendarSession["details"], suggested: Record<string, unknown>): CalendarSession["details"] {
+    const currentDetails = current ?? {};
+    const merged = { ...currentDetails, ...suggested };
+    const suggestedExercises = Array.isArray(suggested.exercises) ? suggested.exercises : [];
+    if (suggestedExercises.length) {
+        const currentExercises = currentDetails.exercises ?? [];
+        merged.exercises = currentExercises.map((exercise) => {
+            const update = suggestedExercises.find((item: unknown) =>
+                item && typeof item === "object" && String((item as Record<string, unknown>).name ?? "").toLowerCase() === exercise.name.toLowerCase()
+            ) as Record<string, unknown> | undefined;
+            return update ? { ...exercise, ...update } : exercise;
+        });
+        suggestedExercises.forEach((item: unknown) => {
+            if (!item || typeof item !== "object") return;
+            const update = item as Record<string, unknown>;
+            if (!currentExercises.some((exercise) => exercise.name.toLowerCase() === String(update.name ?? "").toLowerCase())) {
+                merged.exercises?.push(update as typeof currentExercises[number]);
+            }
+        });
+    }
+    return merged;
+}
+
+function formatSuggestedDetails(change: Record<string, unknown>, target?: CalendarSession): string[] {
+    const lines: string[] = [];
+    const suggested = change.details && typeof change.details === "object" ? change.details as Record<string, unknown> : change;
+    const currentExercises = target?.details?.exercises ?? [];
+    if (Array.isArray(suggested.exercises)) {
+        suggested.exercises.forEach((item) => {
+            if (!item || typeof item !== "object") return;
+            const next = item as Record<string, unknown>;
+            const previous = currentExercises.find((exercise) => exercise.name.toLowerCase() === String(next.name ?? "").toLowerCase());
+            const fields = ["sets", "reps", "load", "rpe"].flatMap((key) => {
+                if (next[key] === undefined) return [];
+                const before = previous?.[key as keyof typeof previous];
+                return before !== undefined && String(before) !== String(next[key])
+                    ? [`${formatChangeLabel(key)}: ${before} → ${next[key]}`]
+                    : [`${formatChangeLabel(key)}: ${next[key]}`];
+            });
+            lines.push(`${String(next.name ?? "Exercise")}${fields.length ? ` — ${fields.join(" · ")}` : ""}`);
+        });
+    }
+    Object.entries(suggested).forEach(([key, value]) => {
+        if (key === "exercises" || value === null || value === undefined || value === "") return;
+        const before = target?.details?.[key as keyof NonNullable<CalendarSession["details"]>];
+        lines.push(before !== undefined && String(before) !== String(value)
+            ? `${formatChangeLabel(key)}: ${String(before)} → ${String(value)}`
+            : `${formatChangeLabel(key)}: ${String(value)}`);
+    });
+    return lines;
+}
+
 export default function ProgramCalendar() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
     const colors = useThemeColor();
     const [programs, setPrograms] = useState<CalendarProgram[]>([]);
     const [sessions, setSessions] = useState<DisplaySession[]>([]);
+    const [suggestions, setSuggestions] = useState<CalendarSuggestion[]>([]);
     const [month, setMonth] = useState(startOfMonth(new Date()));
     const [selectedDate, setSelectedDate] = useState(new Date());
     const [loading, setLoading] = useState(true);
@@ -68,9 +191,11 @@ export default function ProgramCalendar() {
     const [notice, setNotice] = useState("");
     const [showSetup, setShowSetup] = useState(false);
     const [showImport, setShowImport] = useState(false);
+    const [showSuggestionsImport, setShowSuggestionsImport] = useState(false);
     const [showHelp, setShowHelp] = useState(false);
     const [prompt, setPrompt] = useState("");
     const [response, setResponse] = useState("");
+    const [suggestionResponse, setSuggestionResponse] = useState("");
     const [mode, setMode] = useState<CalendarMode>("combined");
     const [goal, setGoal] = useState("");
     const [durationWeeks, setDurationWeeks] = useState("8");
@@ -91,6 +216,11 @@ export default function ProgramCalendar() {
     const [draggingFile, setDraggingFile] = useState(false);
 
     const selectedSessions = useMemo(() => sessionForDate(sessions, selectedDate), [sessions, selectedDate]);
+    const selectedSuggestions = suggestions.filter((suggestion) =>
+        suggestion.program_id === selectedSessions[0]?.program_id
+        && (suggestion.suggestion_date === getLocalYYYYMMDD(selectedDate) || getSuggestionDates(suggestion.changes).includes(getLocalYYYYMMDD(selectedDate)))
+    );
+    const activeProgram = programs.find((program) => selectedSessions.some((session) => session.program_id === program.id)) ?? programs[0];
 
     function focusDate(dateValue: string) {
         const date = parseISO(dateValue);
@@ -144,8 +274,23 @@ export default function ProgramCalendar() {
                     if (firstPlannedSession) focusDate(firstPlannedSession.date);
                 }
             }
+            const { data: suggestionData, error: suggestionError } = await supabase
+                .from("calendar_program_suggestions")
+                .select("*")
+                .in("program_id", nextPrograms.map((program) => program.id))
+                .eq("user_id", user.id)
+                .order("suggestion_date", { ascending: true, nullsFirst: false });
+            if (suggestionError?.code === "42P01" || suggestionError?.code === "PGRST205") {
+                setSuggestions([]);
+            } else if (suggestionError) {
+                setError("Could not load calendar suggestions.");
+                setSuggestions([]);
+            } else {
+                setSuggestions((suggestionData ?? []) as CalendarSuggestion[]);
+            }
         } else {
             setSessions([]);
+            setSuggestions([]);
         }
         setLoading(false);
     }
@@ -380,7 +525,15 @@ export default function ProgramCalendar() {
     function exportProgram(program: CalendarProgram) {
         const programSessions = sessions
             .filter((session) => session.program_id === program.id)
-            .map((session) => ({ date: session.date, mode: session.mode, title: session.title, details: session.details ?? {} }));
+            .map((session) => ({
+                date: session.date,
+                mode: session.mode,
+                title: session.title,
+                details: session.details ?? {},
+                status: session.status,
+                completion_notes: session.completion_notes,
+                completed_at: session.completed_at,
+            }));
         const json = JSON.stringify({
             name: program.name,
             mode: program.mode,
@@ -391,6 +544,142 @@ export default function ProgramCalendar() {
         }, null, 2);
         setExportedJson(json);
         downloadJson(json, program.name);
+    }
+
+    async function exportProgramForAnalysis(program: CalendarProgram) {
+        const programSessions = sessions
+            .filter((session) => session.program_id === program.id)
+            .map((session) => ({
+                date: session.date,
+                mode: session.mode,
+                title: session.title,
+                details: session.details ?? {},
+                status: session.status,
+                completion_notes: session.completion_notes,
+                completed_at: session.completed_at,
+            }));
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+            setError("Your session has expired. Please sign in again.");
+            return;
+        }
+        const programStart = new Date(`${program.start_date}T00:00:00`);
+        const programEnd = new Date(programStart);
+        programEnd.setDate(programEnd.getDate() + program.duration_weeks * 7 - 1);
+        const { data: workoutData, error: workoutError } = await supabase
+            .from("workouts")
+            .select("start_time, end_time, title, activity_data, sets(weight_kg, reps, rpe, distance_km, duration_s, set_type, exercises(name))")
+            .eq("user_id", user.id)
+            .gte("start_time", programStart.toISOString())
+            .lte("start_time", `${programEnd.toISOString().slice(0, 10)}T23:59:59`)
+            .order("start_time", { ascending: true })
+            .limit(500);
+        if (workoutError) {
+            console.error("Workout evidence export error:", workoutError);
+            setError("Could not export workout evidence for analysis.");
+            return;
+        }
+        const json = JSON.stringify({
+            type: "hevyload_program_analysis_request",
+            instructions: "Analyze the planned program together with the actual workout evidence. Return overall program recommendations, not one suggestion per workout. Explain what the evidence shows (for example RPE/load, heart rate/pace, distance, duration, or missed sessions), why it may affect the expected result or upcoming efforts, and propose a concrete program change. Never claim evidence that is not present. Recommendations are proposals only: the app must ask the user for permission before applying any change.",
+            program: {
+                name: program.name,
+                mode: program.mode,
+                start_date: program.start_date,
+                duration_weeks: program.duration_weeks,
+                overview: program.overview,
+                sessions: programSessions,
+            },
+            workout_evidence: workoutData ?? [],
+            response_shape: {
+                type: "hevyload_program_analysis",
+                summary: "Overall assessment",
+                suggestions: [{ "date": null, "title": "Short overall program update", "evidence": "Specific observed workout evidence and its date", "summary": "Explain why the evidence matters and what may happen if the program is unchanged", "priority": "low | medium | high", "changes": { "scope": "program", "sessions": [{ "dates": ["YYYY-MM-DD"], "title": "Optional replacement title", "details": "Concrete proposed calendar changes" }] } }],
+            },
+        }, null, 2);
+        setExportedJson(json);
+        downloadJson(json, `${program.name}-analysis`);
+        setNotice("Exported the current program and completion data for analysis.");
+    }
+
+    function normalizeSuggestion(value: unknown): Omit<CalendarSuggestion, "id" | "program_id" | "created_at"> | null {
+        if (!value || typeof value !== "object") return null;
+        const raw = value as Record<string, unknown>;
+        const title = typeof raw.title === "string" ? raw.title.trim() : "";
+        const summary = typeof raw.summary === "string" ? raw.summary.trim() : "";
+        if (!title || !summary) return null;
+        const evidence = typeof raw.evidence === "string" ? raw.evidence.trim() : "No specific workout evidence was provided.";
+        const date = raw.date === null || raw.date === undefined ? null : typeof raw.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(raw.date) ? raw.date : undefined;
+        if (date === undefined) return null;
+        const priority = raw.priority === "low" || raw.priority === "high" ? raw.priority : "medium";
+        return { suggestion_date: date, title, summary, evidence, changes: raw.changes && typeof raw.changes === "object" ? raw.changes as Record<string, unknown> : {}, priority };
+    }
+
+    async function importSuggestions() {
+        setError("");
+        setNotice("");
+        setBusy(true);
+        try {
+            const parsed = extractJsonFromResponse(suggestionResponse) as Record<string, unknown>;
+            const rawSuggestions = Array.isArray(parsed.suggestions) ? parsed.suggestions : [];
+            const normalized = rawSuggestions.map(normalizeSuggestion).filter((item): item is NonNullable<typeof item> => Boolean(item));
+            if (!normalized.length) throw new Error("No valid suggestions were found. Include a suggestions array with title and summary.");
+            const program = programs.find((item) => item.id === selectedSessions[0]?.program_id) ?? programs.find((item) => sessions.some((session) => session.program_id === item.id));
+            if (!program) throw new Error("Create or import a program before importing suggestions.");
+            const { error: deleteError } = await supabase.from("calendar_program_suggestions").delete().eq("program_id", program.id);
+            if (deleteError) throw deleteError;
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user) throw new Error("Your session has expired. Please sign in again.");
+            const { error: insertError } = await supabase.from("calendar_program_suggestions").insert(normalized.map((suggestion) => ({ ...suggestion, user_id: user.id, program_id: program.id })));
+            if (insertError) throw insertError;
+            setSuggestionResponse("");
+            setShowSuggestionsImport(false);
+            setNotice(`Replaced previous suggestions with ${normalized.length} new recommendation${normalized.length === 1 ? "" : "s"}.`);
+            await loadPrograms();
+        } catch (suggestionError) {
+            console.error("Calendar suggestions import error:", suggestionError);
+            const databaseError = suggestionError as { code?: string };
+            setError(databaseError.code === "42P01" || databaseError.code === "PGRST205"
+                ? "Suggestions storage is not available yet. Apply the program suggestions migration first."
+                : suggestionError instanceof Error ? suggestionError.message : "Could not import suggestions.");
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function applySuggestion(suggestion: CalendarSuggestion) {
+        const rawSessions = Array.isArray(suggestion.changes.sessions)
+            ? suggestion.changes.sessions
+            : suggestion.suggestion_date ? [{ dates: [suggestion.suggestion_date], details: suggestion.changes }] : [];
+        if (!rawSessions.length) {
+            setNotice("This recommendation has no structured calendar changes to apply.");
+            return;
+        }
+        setBusy(true);
+        try {
+            for (const rawChange of rawSessions) {
+                if (!rawChange || typeof rawChange !== "object") continue;
+                const change = rawChange as { dates?: unknown; title?: unknown; details?: unknown; mode?: unknown };
+                const dates = Array.isArray(change.dates) ? change.dates.filter((date): date is string => typeof date === "string") : [];
+                for (const date of dates) {
+                    const target = sessions.find((session) => session.program_id === suggestion.program_id && session.date === date);
+                    if (!target) continue;
+                    const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
+                    if (typeof change.title === "string" && change.title.trim()) update.title = change.title.trim();
+                    if (change.mode === "running" || change.mode === "weight_training" || change.mode === "other" || change.mode === "rest") update.mode = change.mode;
+                    if (change.details && typeof change.details === "object") update.details = mergeSuggestedDetails(target.details, change.details as Record<string, unknown>);
+                    const { error: updateError } = await supabase.from("calendar_sessions").update(update).eq("id", target.id);
+                    if (updateError) throw updateError;
+                }
+            }
+            setNotice(`Applied "${suggestion.title}" to the proposed calendar sessions.`);
+            await loadPrograms();
+        } catch (applyError) {
+            console.error("Calendar suggestion apply error:", applyError);
+            setError(applyError instanceof Error ? applyError.message : "Could not apply this program update.");
+        } finally {
+            setBusy(false);
+        }
     }
 
     function exportAllPrograms() {
@@ -726,6 +1015,8 @@ export default function ProgramCalendar() {
                     <Pressable style={[styles.primaryButton, { backgroundColor: colors.tint }]} onPress={() => setShowSetup((value) => !value)}><Text style={styles.primaryText}>New prompt</Text></Pressable>
                     <Pressable style={[styles.secondaryButton, { borderColor: colors.border }]} onPress={() => setShowImport((value) => !value)}><Text style={{ color: colors.text }}>Import JSON</Text></Pressable>
                     {programs.length ? <Pressable style={[styles.secondaryButton, { borderColor: colors.border }]} onPress={exportAllPrograms}><Text style={{ color: colors.text }}>Export JSON</Text></Pressable> : null}
+                    {activeProgram ? <Pressable style={[styles.secondaryButton, { borderColor: colors.border }]} onPress={() => exportProgramForAnalysis(activeProgram)}><Ionicons name="analytics-outline" size={15} color={colors.tint} /><Text style={{ color: colors.text }}>Export for analysis</Text></Pressable> : null}
+                    {activeProgram ? <Pressable style={[styles.secondaryButton, { borderColor: colors.border }]} onPress={() => setShowSuggestionsImport((value) => !value)}><Ionicons name="bulb-outline" size={15} color={colors.tint} /><Text style={{ color: colors.text }}>Import suggestions</Text></Pressable> : null}
                     <Pressable style={[styles.helpButton, { borderColor: colors.border, backgroundColor: colors.secondaryBackground }]} onPress={() => setShowHelp((value) => !value)} accessibilityLabel="Explain Program Calendar"><Ionicons name="help" size={16} color={colors.tint} /></Pressable>
                     {Object.keys(changedSessions).length ? (
                         <>
@@ -750,6 +1041,7 @@ export default function ProgramCalendar() {
                 </View> : null}
                 {showSetup ? renderSetup() : null}
                 {showImport ? <View id="program-calendar-import-dropzone" style={[styles.panel, { backgroundColor: colors.card, borderColor: draggingFile ? colors.tint : colors.border }]}><View style={styles.panelHeader}><Text style={[styles.panelTitle, { color: colors.text }]}>Import a program</Text><Pressable onPress={() => setShowImport(false)} style={styles.closeButton} accessibilityLabel="Close import"><Ionicons name="close" size={20} color={colors.secondaryText} /></Pressable></View><Text style={[styles.helper, { color: colors.secondaryText }]}>Drop a JSON file here, or choose one from your device. You can also paste JSON below.</Text><Pressable style={[styles.secondaryButton, { borderColor: colors.border }]} onPress={chooseImportFile}><Text style={{ color: colors.text }}>Choose JSON file</Text></Pressable><TextInput multiline value={response} onChangeText={setResponse} placeholder="Paste JSON here..." placeholderTextColor={colors.secondaryText} style={[styles.largeInput, { color: colors.text, borderColor: colors.border }]} /><Pressable style={[styles.primaryButton, { backgroundColor: colors.tint }]} onPress={importResponse}><Text style={styles.primaryText}>{busy ? "Importing..." : "Import plan"}</Text></Pressable></View> : null}
+                {showSuggestionsImport ? <View style={[styles.panel, { backgroundColor: colors.card, borderColor: colors.border }]}><View style={styles.panelHeader}><Text style={[styles.panelTitle, { color: colors.text }]}>Import workout suggestions</Text><Pressable onPress={() => setShowSuggestionsImport(false)} style={styles.closeButton} accessibilityLabel="Close suggestions import"><Ionicons name="close" size={20} color={colors.secondaryText} /></Pressable></View><Text style={[styles.helper, { color: colors.secondaryText }]}>Paste the analysis JSON returned by your AI tool. New suggestions replace the previous suggestions for {activeProgram?.name ?? "the active program"}.</Text><TextInput multiline value={suggestionResponse} onChangeText={setSuggestionResponse} placeholder="Paste analysis JSON here..." placeholderTextColor={colors.secondaryText} style={[styles.largeInput, { color: colors.text, borderColor: colors.border }]} /><Pressable style={[styles.primaryButton, { backgroundColor: colors.tint }]} onPress={importSuggestions}><Text style={styles.primaryText}>{busy ? "Replacing suggestions..." : "Replace suggestions"}</Text></Pressable></View> : null}
                 {pendingImport ? <View style={[styles.conflictPanel, { backgroundColor: colors.card, borderColor: colors.tint }]}><Text style={[styles.panelTitle, { color: colors.text }]}>Similar program already exists</Text><Text style={[styles.helper, { color: colors.secondaryText }]}>&quot;{pendingImport.duplicate.name}&quot; starts on {pendingImport.duplicate.start_date}. What would you like to do with &quot;{pendingImport.program.name}&quot;?</Text><View style={styles.actionRow}><Pressable onPress={() => resolveImportConflict("replace")} disabled={busy}><Text style={{ color: colors.error, fontWeight: "800" }}>Replace current</Text></Pressable><Pressable onPress={() => resolveImportConflict("keep")} disabled={busy}><Text style={{ color: colors.tint, fontWeight: "800" }}>Keep both</Text></Pressable><Pressable onPress={() => resolveImportConflict("cancel")} disabled={busy}><Text style={{ color: colors.secondaryText, fontWeight: "700" }}>Cancel</Text></Pressable></View></View> : null}
                 {prompt ? <View style={[styles.panel, { backgroundColor: colors.card, borderColor: colors.border }]}><View style={styles.panelHeader}><Text style={[styles.panelTitle, { color: colors.text }]}>Copy-ready prompt</Text><View style={styles.panelActions}><Pressable onPress={copyPrompt} style={[styles.secondaryButton, { borderColor: colors.border }]} accessibilityLabel="Copy prompt"><Text style={{ color: colors.text }}>Copy</Text></Pressable><Pressable onPress={() => setPrompt("")} style={styles.closeButton} accessibilityLabel="Close prompt"><Ionicons name="close" size={20} color={colors.secondaryText} /></Pressable></View></View><TextInput multiline editable={false} selectTextOnFocus value={prompt} style={[styles.largeInput, { color: colors.text, borderColor: colors.border }]} /></View> : null}
                 {exportedJson ? <View style={[styles.panel, { backgroundColor: colors.card, borderColor: colors.border }]}><View style={styles.panelHeader}><Text style={[styles.panelTitle, { color: colors.text }]}>Exported JSON</Text><Pressable onPress={() => setExportedJson("")} style={styles.closeButton} accessibilityLabel="Close exported JSON"><Ionicons name="close" size={20} color={colors.secondaryText} /></Pressable></View><Text style={[styles.helper, { color: colors.secondaryText }]}>Select and copy this JSON to save or reuse the plan.</Text><TextInput multiline editable={false} selectTextOnFocus value={exportedJson} style={[styles.exportInput, { color: colors.text, borderColor: colors.border }]} /></View> : null}
@@ -767,17 +1059,18 @@ export default function ProgramCalendar() {
                 </View>
                 <Text style={[styles.sectionLabel, { color: colors.accentText }]}>Selected day</Text>
                 <Text style={[styles.selectedDate, { color: colors.text }]}>{format(selectedDate, "EEEE, MMMM d")}</Text>
+                {selectedSuggestions.length ? <View style={styles.suggestionsPanel}><View style={styles.overviewHeader}><Ionicons name="bulb-outline" size={20} color={colors.tint} /><Text style={[styles.overviewTitle, { color: colors.text }]}>Suggested workout changes</Text></View>{selectedSuggestions.map((suggestion) => { const target = selectedSessions.find((session) => session.program_id === suggestion.program_id); const rawChanges = Array.isArray(suggestion.changes.sessions) ? suggestion.changes.sessions : [{ details: suggestion.changes }]; const changeLines = rawChanges.flatMap((change) => change && typeof change === "object" ? formatSuggestedDetails(change as Record<string, unknown>, target) : []); return <View key={suggestion.id} style={styles.suggestionItem}><Text style={[styles.suggestionTitle, { color: colors.text }]}>{suggestion.title} · {suggestion.priority}</Text><Text style={[styles.suggestionLabel, { color: colors.secondaryText }]}>Evidence</Text><Text style={[styles.detail, { color: colors.secondaryText }]}>{suggestion.evidence}</Text><Text style={[styles.suggestionLabel, { color: colors.secondaryText }]}>Why it matters</Text><Text style={[styles.detail, { color: colors.secondaryText }]}>{suggestion.summary}</Text>{changeLines.map((line, index) => <Text key={`${suggestion.id}-selected-change-${index}`} style={[styles.changeLine, { color: colors.tint }]}>• {line}</Text>)}<Pressable style={[styles.secondaryButton, { borderColor: colors.tint }]} onPress={() => applySuggestion(suggestion)}><Text style={{ color: colors.tint, fontWeight: "800" }}>Approve and apply change</Text></Pressable></View>; })}</View> : null}
                 {selectedSessions.length ? selectedSessions.map(renderSession) : <Text style={[styles.empty, { color: colors.secondaryText }]}>No planned sessions on this date.</Text>}
                 <View style={styles.programsSection}>
                     <Text style={[styles.sectionLabel, { color: colors.accentText }]}>Program details</Text>
-                    {programs.map((program) => <View key={program.id} style={styles.programSection}><View style={[styles.programSummary, { backgroundColor: colors.card, borderColor: colors.border }]}><View style={[styles.programIcon, { backgroundColor: program.mode === "running" ? "#A855F7" : colors.tint }]}><Ionicons name={program.mode === "running" ? "walk" : program.mode === "weight_training" ? "barbell" : program.mode === "other" ? "ellipsis-horizontal" : "layers"} size={22} color="#fff" /></View><View style={{ flex: 1 }}><Text style={[styles.programName, { color: colors.text }]}>{program.name}</Text><Text style={[styles.programDescription, { color: colors.secondaryText }]}>{formatModeLabel(program.mode)} · {program.duration_weeks} weeks · starts {program.start_date}</Text></View><View style={styles.programActions}><Pressable accessibilityLabel={`Export ${program.name} as JSON`} onPress={() => exportProgram(program)}><Ionicons name="download-outline" size={20} color={colors.tint} /></Pressable><Pressable accessibilityLabel={`Delete ${program.name}`} onPress={() => deleteProgram(program)}><Ionicons name="trash-outline" size={20} color={colors.error} /></Pressable></View></View>{pendingDeleteId === program.id ? <View style={[styles.deleteConfirm, { backgroundColor: colors.card, borderColor: colors.error }]}><Text style={[styles.deleteText, { color: colors.text }]}>Delete this program and all its sessions?</Text><View style={styles.actionRow}><Pressable onPress={() => confirmDeleteProgram(program)}><Text style={{ color: colors.error, fontWeight: "800" }}>Delete permanently</Text></Pressable><Pressable onPress={() => setPendingDeleteId(null)}><Text style={{ color: colors.secondaryText, fontWeight: "700" }}>Cancel</Text></Pressable></View></View> : null}<ProgramOverview program={program} sessions={sessions.filter((session) => session.program_id === program.id)} colors={colors} /></View>)}
+                    {programs.map((program) => <View key={program.id} style={styles.programSection}><View style={[styles.programSummary, { backgroundColor: colors.card, borderColor: colors.border }]}><View style={[styles.programIcon, { backgroundColor: program.mode === "running" ? "#A855F7" : colors.tint }]}><Ionicons name={program.mode === "running" ? "walk" : program.mode === "weight_training" ? "barbell" : program.mode === "other" ? "ellipsis-horizontal" : "layers"} size={22} color="#fff" /></View><View style={{ flex: 1 }}><Text style={[styles.programName, { color: colors.text }]}>{program.name}</Text><Text style={[styles.programDescription, { color: colors.secondaryText }]}>{formatModeLabel(program.mode)} · {program.duration_weeks} weeks · starts {program.start_date}</Text></View><View style={styles.programActions}><Pressable accessibilityLabel={`Export ${program.name} as JSON`} onPress={() => exportProgram(program)}><Ionicons name="download-outline" size={20} color={colors.tint} /></Pressable><Pressable accessibilityLabel={`Export ${program.name} for analysis`} onPress={() => exportProgramForAnalysis(program)}><Ionicons name="analytics-outline" size={20} color={colors.tint} /></Pressable><Pressable accessibilityLabel={`Delete ${program.name}`} onPress={() => deleteProgram(program)}><Ionicons name="trash-outline" size={20} color={colors.error} /></Pressable></View></View>{pendingDeleteId === program.id ? <View style={[styles.deleteConfirm, { backgroundColor: colors.card, borderColor: colors.error }]}><Text style={[styles.deleteText, { color: colors.text }]}>Delete this program and all its sessions?</Text><View style={styles.actionRow}><Pressable onPress={() => confirmDeleteProgram(program)}><Text style={{ color: colors.error, fontWeight: "800" }}>Delete permanently</Text></Pressable><Pressable onPress={() => setPendingDeleteId(null)}><Text style={{ color: colors.secondaryText, fontWeight: "700" }}>Cancel</Text></Pressable></View></View> : null}<ProgramOverview program={program} sessions={sessions.filter((session) => session.program_id === program.id)} colors={colors} suggestions={suggestions.filter((suggestion) => suggestion.program_id === program.id)} onApplySuggestion={applySuggestion} /></View>)}
                 </View>
             </View>
         </ScrollView>
     );
 }
 
-function ProgramOverview({ program, sessions, colors }: { program: CalendarProgram; sessions: CalendarSession[]; colors: ReturnType<typeof useThemeColor> }) {
+function ProgramOverview({ program, sessions, colors, suggestions, onApplySuggestion }: { program: CalendarProgram; sessions: CalendarSession[]; colors: ReturnType<typeof useThemeColor>; suggestions: CalendarSuggestion[]; onApplySuggestion: (suggestion: CalendarSuggestion) => void }) {
     const overview = program.overview;
     const activeSessions = sessions.filter((session) => session.mode !== "rest");
     const averageSessionsPerWeek = Math.round((activeSessions.length / program.duration_weeks) * 10) / 10;
@@ -801,6 +1094,7 @@ function ProgramOverview({ program, sessions, colors }: { program: CalendarProgr
             <View style={styles.overviewHeader}><Ionicons name="information-circle-outline" size={20} color={colors.tint} /><Text style={[styles.overviewTitle, { color: colors.text }]}>Program overview</Text></View>
             {items.map(([label, value]) => <View key={label} style={styles.overviewItem}><Text style={[styles.overviewLabel, { color: colors.secondaryText }]}>{label}</Text><Text style={[styles.overviewValue, { color: colors.text }]}>{value}</Text></View>)}
             {overview?.success_metrics?.length ? <View style={styles.overviewItem}><Text style={[styles.overviewLabel, { color: colors.secondaryText }]}>Success metrics</Text>{overview.success_metrics.map((metric) => <Text key={metric} style={[styles.metric, { color: colors.text }]}>• {metric}</Text>)}</View> : null}
+            {suggestions.filter((suggestion) => suggestion.suggestion_date === null && getSuggestionDates(suggestion.changes).length === 0).length ? <View style={styles.suggestionsPanel}><View style={styles.overviewHeader}><Ionicons name="bulb-outline" size={20} color={colors.tint} /><Text style={[styles.overviewTitle, { color: colors.text }]}>Program updates</Text></View>{suggestions.filter((suggestion) => suggestion.suggestion_date === null && getSuggestionDates(suggestion.changes).length === 0).map((suggestion) => { const changeLines = formatSuggestionChanges(suggestion.changes); return <View key={suggestion.id} style={styles.suggestionItem}><Text style={[styles.suggestionTitle, { color: colors.text }]}>{suggestion.title} · {suggestion.priority}</Text><Text style={[styles.suggestionLabel, { color: colors.secondaryText }]}>Evidence</Text><Text style={[styles.detail, { color: colors.secondaryText }]}>{suggestion.evidence}</Text><Text style={[styles.suggestionLabel, { color: colors.secondaryText }]}>Why it matters</Text><Text style={[styles.detail, { color: colors.secondaryText }]}>{suggestion.summary}</Text>{changeLines.length ? <View><Text style={[styles.suggestionLabel, { color: colors.secondaryText }]}>Proposed calendar change</Text>{changeLines.map((line, index) => <Text key={`${suggestion.id}-change-${index}`} style={[styles.changeLine, { color: colors.tint }]}>• {line}</Text>)}</View> : null}<Pressable style={[styles.secondaryButton, { borderColor: colors.tint }]} onPress={() => onApplySuggestion(suggestion)}><Text style={{ color: colors.tint, fontWeight: "800" }}>Approve and apply change</Text></Pressable></View>; })}</View> : null}
         </View>
     );
 }
@@ -819,6 +1113,11 @@ const styles = StyleSheet.create({
     buildButton: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, paddingHorizontal: 14, paddingVertical: 14, borderRadius: 12, marginTop: 2 },
     secondaryButton: { flexDirection: "row", gap: 6, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10, borderWidth: 1, alignItems: "center" },
     panel: { padding: 14, borderRadius: 14, borderWidth: 1, gap: 10 },
+    suggestionsPanel: { padding: 14, borderRadius: 14, borderWidth: 1, gap: 10 },
+    suggestionItem: { gap: 4, paddingTop: 8, borderTopWidth: 1, borderTopColor: "#00000012" },
+    suggestionTitle: { fontWeight: "800", textTransform: "capitalize" },
+    suggestionLabel: { fontSize: 11, fontWeight: "800", textTransform: "uppercase", marginTop: 5 },
+    changeLine: { lineHeight: 19, marginTop: 2 },
     setupPanel: { padding: 20, borderRadius: 20, borderWidth: 1, gap: 16 },
     setupHeading: { flexDirection: "row", alignItems: "center", gap: 12 },
     setupIcon: { width: 42, height: 42, borderRadius: 13, alignItems: "center", justifyContent: "center" },

@@ -29,6 +29,12 @@ Workout analytics for Hevy data focusing on powerlifting metrics, personalized t
 4. Start the app:
    npx expo start
 
+### Strava run import
+
+No Strava subscription or API application is required. Export activities from
+Strava and upload the file through **Import**. GPX, TCX, and Strava CSV exports
+are supported; imported runs are stored in workout history.
+
 For production checks, run:
 
 ```bash
@@ -58,5 +64,12 @@ database tables are required.
 
 Open **Program Calendar** to build a copy-ready prompt from your history, give it
 to an external LLM, and import the returned JSON plan into a dated calendar.
-Calendar storage is isolated in `calendar_programs` and `calendar_sessions` and
-can be removed with the matching rollback SQL under `supabase/rollback/`.
+Use **Export for analysis** on the active program to export its current plan and
+completion statuses. Ask an external LLM to return a
+`hevyload_program_analysis` JSON response, then use **Import suggestions**.
+Suggestions should recommend concrete program/calendar changes such as session
+dates, exercises, sets, reps, loads, running duration, pace, and recovery
+placement. They are shown on their calendar dates (or every date when undated), and
+the previous suggestions for that program are replaced when new ones are
+imported. Calendar storage is isolated in `calendar_programs`,
+`calendar_sessions`, and `calendar_program_suggestions`.

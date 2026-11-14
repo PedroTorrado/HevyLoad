@@ -19,6 +19,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "../../../lib/supabase";
 import { useThemeColor } from "../../../lib/theme";
 import { format } from "date-fns";
+import Svg, { Polyline } from "react-native-svg";
+import type { RoutePoint } from "../../../lib/route";
 
 interface Set {
     id: string;
@@ -45,6 +47,16 @@ interface Workout {
     start_time: string;
     end_time: string | null;
     description: string | null;
+    route_data: RoutePoint[] | null;
+    activity_data: {
+        averageHeartRate?: number | null;
+        maxHeartRate?: number | null;
+        averageSpeed?: number | null;
+        maxSpeed?: number | null;
+        distanceKm?: number | null;
+        durationSeconds?: number | null;
+        splits?: { kilometer: number; pace: string }[];
+    } | null;
 }
 
 const GOLD = "#FFD700";
@@ -174,6 +186,38 @@ function getSetTypeMarker(setType: string | null | undefined, errorColor: string
         default:
             return null;
     }
+}
+
+function formatPace(distanceKm: number, durationSeconds: number): string | null {
+    if (!distanceKm || distanceKm <= 0 || !durationSeconds || durationSeconds <= 0) return null;
+    const secondsPerKm = durationSeconds / distanceKm;
+    return `${Math.floor(secondsPerKm / 60)}:${String(Math.round(secondsPerKm % 60)).padStart(2, "0")} /km`;
+}
+
+function RouteMap({ route, color }: { route: RoutePoint[]; color: string }) {
+    if (route.length < 2) return null;
+    const width = 340;
+    const height = 220;
+    const latitudes = route.map((point) => point.latitude);
+    const longitudes = route.map((point) => point.longitude);
+    const minLat = Math.min(...latitudes);
+    const maxLat = Math.max(...latitudes);
+    const minLon = Math.min(...longitudes);
+    const maxLon = Math.max(...longitudes);
+    const latRange = maxLat - minLat || 0.0001;
+    const lonRange = maxLon - minLon || 0.0001;
+    const points = route
+        .filter((_, index) => index % Math.max(1, Math.ceil(route.length / 500)) === 0)
+        .map((point) => `${((point.longitude - minLon) / lonRange) * (width - 24) + 12},${height - (((point.latitude - minLat) / latRange) * (height - 24) + 12)}`)
+        .join(" ");
+    return (
+        <View style={styles.routeCard}>
+            <Text style={styles.routeTitle}>GPS route</Text>
+            <Svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`}>
+                <Polyline points={points} fill="none" stroke={color} strokeWidth="4" strokeLinejoin="round" strokeLinecap="round" />
+            </Svg>
+        </View>
+    );
 }
 
 export default function WorkoutDetails() {
@@ -332,15 +376,33 @@ export default function WorkoutDetails() {
     const totalVolume = Math.round(
         sets.reduce((sum, s) => sum + (s.weight_kg ?? 0) * (s.reps ?? 0), 0)
     );
+    const distanceKm = sets.reduce((sum, s) => sum + (s.distance_km ?? 0), 0) || Number(workout.activity_data?.distanceKm ?? 0);
+    const durationSeconds = sets.reduce((sum, s) => sum + (s.duration_s ?? 0), 0) || Number(workout.activity_data?.durationSeconds ?? 0);
+    const averagePace = formatPace(distanceKm, durationSeconds);
+    const activityData = workout.activity_data;
+    const isRunningWorkout = Boolean(
+        workout.route_data?.length
+        || distanceKm > 0
+        || /run|running|corrida/i.test(workout.title)
+        || sets.some((set) => /run|running|corrida/i.test(set.exercise?.name ?? "")),
+    );
     const prCount = sets.filter(s => s.isPR || s.isWeightPR).length;
 
     const summaryStats = [
         durationStr
             ? { key: "duration", icon: "time-outline" as const, label: t("app.workout.duration"), value: durationStr }
             : { key: "start", icon: "time-outline" as const, label: t("app.workout.start"), value: timeStr },
-        { key: "volume", icon: "barbell-outline" as const, label: t("app.workout.volume"), value: `${totalVolume.toLocaleString()} kg` },
-        { key: "sets", icon: "layers-outline" as const, label: t("app.workout.sets"), value: `${sets.length}` },
-        { key: "prs", icon: "trophy-outline" as const, label: t("app.workout.prs"), value: `${prCount}`, highlight: prCount > 0 },
+        isRunningWorkout
+            ? { key: "distance", icon: "navigate-outline" as const, label: "Distance", value: `${distanceKm.toFixed(2)} km` }
+            : { key: "volume", icon: "barbell-outline" as const, label: t("app.workout.volume"), value: `${totalVolume.toLocaleString()} kg` },
+        ...(averagePace ? [{ key: "pace", icon: "speedometer-outline" as const, label: "Avg pace", value: averagePace }] : []),
+        ...(activityData?.averageHeartRate ? [{ key: "heart", icon: "heart-outline" as const, label: "Avg heart rate", value: `${Math.round(activityData.averageHeartRate)} bpm` }] : []),
+        ...(isRunningWorkout
+            ? []
+            : [
+                { key: "sets", icon: "layers-outline" as const, label: t("app.workout.sets"), value: `${sets.length}` },
+                { key: "prs", icon: "trophy-outline" as const, label: t("app.workout.prs"), value: `${prCount}`, highlight: prCount > 0 },
+            ]),
     ];
 
     return (
@@ -392,6 +454,20 @@ export default function WorkoutDetails() {
                     ))}
                 </View>
 
+                {workout.route_data && workout.route_data.length > 1 && (
+                    <FadeInView delay={180}>
+                        <RouteMap route={workout.route_data} color={colors.tint} />
+                    </FadeInView>
+                )}
+                {isRunningWorkout && activityData && (
+                    <View style={[styles.runMetricsCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                        {activityData.maxHeartRate ? <Text style={[styles.runMetricText, { color: colors.text }]}>Max heart rate: {Math.round(activityData.maxHeartRate)} bpm</Text> : null}
+                        {activityData.averageSpeed ? <Text style={[styles.runMetricText, { color: colors.text }]}>Average speed: {Number(activityData.averageSpeed).toFixed(2)} m/s</Text> : null}
+                        {activityData.maxSpeed ? <Text style={[styles.runMetricText, { color: colors.text }]}>Max speed: {Number(activityData.maxSpeed).toFixed(2)} m/s</Text> : null}
+                        {activityData.splits?.length ? <Text style={[styles.runMetricText, { color: colors.text }]}>Splits: {activityData.splits.map((split) => `${split.kilometer} km ${split.pace}`).join(" · ")}</Text> : null}
+                    </View>
+                )}
+
                 {/* Notes */}
                 {workout.description ? (
                     <FadeInView
@@ -408,12 +484,11 @@ export default function WorkoutDetails() {
                     </FadeInView>
                 ) : null}
 
-                {/* Exercises */}
-                <Text style={[styles.sectionTitle, { color: colors.accentText }]}>
+                {!isRunningWorkout && <Text style={[styles.sectionTitle, { color: colors.accentText }]}>
                     {t("app.workout.exercises")} · {Object.keys(groupedSets).length}
-                </Text>
+                </Text>}
 
-                {Object.entries(groupedSets).map(([exerciseName, exerciseSets], exIndex) => {
+                {!isRunningWorkout && Object.entries(groupedSets).map(([exerciseName, exerciseSets], exIndex) => {
                     const exercise = exerciseSets[0]?.exercise;
                     const cardDelay = 250 + exIndex * 70;
                     let workingSetNumber = 0;
@@ -584,6 +659,25 @@ const styles = StyleSheet.create({
         marginBottom: 6,
         fontFamily: "System",
     },
+    routeCard: {
+        borderRadius: 16,
+        borderWidth: 1,
+        borderColor: "#2C2C2E",
+        padding: 12,
+        marginBottom: 8,
+        backgroundColor: "#1C1C1E",
+        overflow: "hidden",
+    },
+    routeTitle: {
+        color: "#A1A1AA",
+        fontSize: 11,
+        fontWeight: "800",
+        letterSpacing: 1,
+        textTransform: "uppercase",
+        marginBottom: 4,
+    },
+    runMetricsCard: { borderWidth: 1, borderRadius: 16, padding: 16, marginBottom: 8, gap: 8 },
+    runMetricText: { fontSize: 14, fontWeight: "600" },
     notesText: { fontSize: 14, lineHeight: 21, fontWeight: "500", fontFamily: "System" },
 
     sectionTitle: {

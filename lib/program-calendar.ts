@@ -64,6 +64,18 @@ export interface CalendarSession extends ImportedCalendarSession {
     completed_at: string | null;
 }
 
+export interface CalendarSuggestion {
+    id: string;
+    program_id: string;
+    suggestion_date: string | null;
+    title: string;
+    summary: string;
+    evidence: string;
+    changes: Record<string, unknown>;
+    priority: "low" | "medium" | "high";
+    created_at: string;
+}
+
 function isDate(value: unknown): value is string {
     return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00`));
 }
