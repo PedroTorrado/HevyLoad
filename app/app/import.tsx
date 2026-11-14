@@ -19,6 +19,9 @@ import { useThemeColor } from "../../lib/theme";
 import { parse } from "date-fns";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system";
+import * as Linking from "expo-linking";
+import type { RoutePoint } from "../../lib/route";
+import * as XLSX from "xlsx";
 
 type StatusType = "success" | "error" | "info";
 type Status = { type: StatusType; title: string; message: string; action?: { label: string; onPress: () => void } };
@@ -28,6 +31,147 @@ const pressFeedback = ({ pressed, hovered }: PressState) => ({
     opacity: pressed ? 0.75 : hovered ? 0.9 : 1,
     transform: [{ scale: pressed ? 0.98 : 1 }],
 });
+
+function csvValue(value: string): string {
+    return `"${value.replace(/"/g, '""')}"`;
+}
+
+function calculateSplits(route: RoutePoint[]): { kilometer: number; seconds: number; pace: string }[] {
+    const splits: { kilometer: number; seconds: number; pace: string }[] = [];
+    let distance = 0;
+    let previousBoundary = 0;
+    let previousTime = route[0]?.time ? new Date(route[0].time).getTime() : 0;
+    for (let index = 1; index < route.length; index++) {
+        const from = route[index - 1];
+        const to = route[index];
+        distance += haversineMeters(from.latitude, from.longitude, to.latitude, to.longitude) / 1000;
+        if (distance >= previousBoundary + 1 && to.time) {
+            const seconds = Math.max(0, (new Date(to.time).getTime() - previousTime) / 1000);
+            const paceSeconds = Math.round(seconds / Math.max(0.001, distance - previousBoundary));
+            splits.push({ kilometer: splits.length + 1, seconds, pace: `${Math.floor(paceSeconds / 60)}:${String(paceSeconds % 60).padStart(2, "0")} /km` });
+            previousBoundary += 1;
+            previousTime = new Date(to.time).getTime();
+        }
+    }
+    return splits;
+}
+
+function normalizeStravaExport(content: string): string {
+    const trimmed = content.trim();
+    if (trimmed.startsWith("<")) {
+        const isTcx = /<TrainingCenterDatabase[\s>]/i.test(trimmed);
+        const gpxPoints = Array.from(trimmed.matchAll(/<trkpt\b[^>]*\blat="([^"]+)"[^>]*\blon="([^"]+)"[^>]*>[\s\S]*?<time>([^<]+)<\/time>[\s\S]*?<\/trkpt>/gi));
+        const start = isTcx
+            ? /<Activity[^>]*Id="([^"]+)"[\s\S]*?<Lap\b/i.exec(trimmed)?.[1]
+            : gpxPoints[0]?.[3] || /<time>([^<]+)<\/time>/i.exec(trimmed)?.[1];
+        if (!start) throw new Error("Could not find a run date in this file.");
+        const lastPoint = gpxPoints[gpxPoints.length - 1];
+        const end = lastPoint?.[3] || start;
+        const duration = isTcx
+            ? Number(/<TotalTimeSeconds>([^<]+)<\/TotalTimeSeconds>/i.exec(trimmed)?.[1] || 0)
+            : Math.max(0, (new Date(end).getTime() - new Date(start).getTime()) / 1000);
+        const distanceMeters = isTcx
+            ? Number(/<DistanceMeters>([^<]+)<\/DistanceMeters>/i.exec(trimmed)?.[1] || 0)
+            : gpxPoints.slice(1).reduce((total, point, index) => {
+                const previous = gpxPoints[index];
+                return total + haversineMeters(
+                    Number(previous[1]), Number(previous[2]),
+                    Number(point[1]), Number(point[2]),
+                );
+            }, 0);
+        const title = /<(?:name|trk)\b[^>]*>([^<]+)<\/(?:name|trk)>/i.exec(trimmed)?.[1]?.trim() || "Strava Run";
+        return [
+            "Title,Start Time,End Time,Description,Exercise Title,Weight,Reps,Distance,Duration,Average Heart Rate,Max Heart Rate,Average Speed,Max Speed",
+            [
+                csvValue(title),
+                csvValue(start),
+                csvValue(end),
+                csvValue("Imported from Strava export"),
+                csvValue("Running"),
+                "0", "0", String(distanceMeters / 1000), String(duration),
+            ].join(","),
+        ].join("\n");
+    }
+
+    const header = trimmed.split(/\r?\n/, 1)[0];
+    const separator = header.includes("\t") ? "\t" : ",";
+    const columns = parseCSVLineStatic(header, separator).map((column) => column.trim().toLowerCase());
+    if (columns.includes("type") && columns.some((column) => column === "start_date_local" || column === "start_date" || column === "date") && columns.some((column) => column === "x_km" || column === "km" || column === "distance")) {
+        const indexOf = (names: string[]) => {
+            for (const name of names) {
+                const exactIndex = columns.indexOf(name);
+                if (exactIndex >= 0) return exactIndex;
+            }
+            return columns.findIndex((column) => names.some((name) => column.includes(name)));
+        };
+        const dateIndex = indexOf(["start_date_local", "start_date"]);
+        const nameIndex = indexOf(["name", "activity name"]);
+        const typeIndex = indexOf(["type"]);
+        const distanceIndex = indexOf(["x_km", "km", "distance"]);
+        const durationIndex = indexOf(["moving_time", "elapsed_time", "total_elapsed_time"]);
+        return [
+            "Title,Start Time,End Time,Description,Exercise Title,Weight,Reps,Distance,Duration,Average Heart Rate,Max Heart Rate,Average Speed,Max Speed",
+            ...trimmed.split(/\r?\n/).slice(1).map((line) => {
+                const values = parseCSVLineStatic(line, separator);
+                if (typeIndex >= 0 && !/run/i.test(values[typeIndex] || "")) return "";
+                const start = (values[dateIndex] || "").trim().replace(/^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})$/, "$1T$2");
+                const duration = Number(values[durationIndex] || 0);
+                const end = start && duration > 0
+                    ? new Date(new Date(start).getTime() + duration * 1000).toISOString()
+                    : "";
+                return [
+                    csvValue(values[nameIndex] || "Strava Run"), csvValue(start), csvValue(end),
+                    csvValue("Imported from Strava export"), csvValue("Running"), "0", "0",
+                    String(Number(values[distanceIndex] || 0)), String(duration),
+                    values[indexOf(["average_heartrate"])] || "", values[indexOf(["max_heartrate"])] || "",
+                    values[indexOf(["average_speed"])] || "", values[indexOf(["max_speed"])] || "",
+                ].join(",");
+            }).filter(Boolean),
+        ].join("\n");
+    }
+    return content;
+}
+
+function extractGpxRoute(content: string): RoutePoint[] {
+    return Array.from(content.matchAll(/<trkpt\b[^>]*\blat="([^"]+)"[^>]*\blon="([^"]+)"[^>]*>[\s\S]*?<time>([^<]+)<\/time>[\s\S]*?<\/trkpt>/gi))
+        .map((match) => ({ latitude: Number(match[1]), longitude: Number(match[2]), time: match[3] }))
+        .filter((point) => Number.isFinite(point.latitude) && Number.isFinite(point.longitude));
+}
+
+function isStravaExport(content: string): boolean {
+    const trimmed = content.trim();
+    if (/Imported from Strava export/i.test(trimmed) || /creator="StravaGPX"/i.test(trimmed)) return true;
+    const header = trimmed.split(/\r?\n/, 1)[0].toLowerCase();
+    const columns = parseCSVLineStatic(header, header.includes("\t") ? "\t" : ",");
+    return columns.includes("type")
+        && columns.some((column) => ["start_date_local", "start_date"].includes(column.trim()))
+        && columns.some((column) => ["x_km", "km", "distance"].includes(column.trim()));
+}
+
+function haversineMeters(latitude1: number, longitude1: number, latitude2: number, longitude2: number): number {
+    const radians = (degrees: number) => degrees * Math.PI / 180;
+    const earthRadiusMeters = 6371000;
+    const latitudeDelta = radians(latitude2 - latitude1);
+    const longitudeDelta = radians(longitude2 - longitude1);
+    const a = Math.sin(latitudeDelta / 2) ** 2
+        + Math.cos(radians(latitude1)) * Math.cos(radians(latitude2)) * Math.sin(longitudeDelta / 2) ** 2;
+    return 2 * earthRadiusMeters * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function parseCSVLineStatic(line: string, separator: string): string[] {
+    const result: string[] = [];
+    let value = "";
+    let quoted = false;
+    for (let index = 0; index < line.length; index++) {
+        const char = line[index];
+        if (char === '"' && line[index + 1] === '"') { value += '"'; index++; }
+        else if (char === '"') quoted = !quoted;
+        else if (char === separator && !quoted) { result.push(value.trim()); value = ""; }
+        else value += char;
+    }
+    result.push(value.trim());
+    return result;
+}
 
 export default function Import() {
     const router = useRouter();
@@ -43,6 +187,7 @@ export default function Import() {
     const [importText, setImportText] = useState("");
     const [progress, setProgress] = useState("");
     const [fileName, setFileName] = useState<string | null>(null);
+    const [routeData, setRouteData] = useState<RoutePoint[] | null>(null);
     // Inline status replaces Alert.alert, which is a no-op on react-native-web
     const [status, setStatus] = useState<Status | null>(null);
 
@@ -57,9 +202,18 @@ export default function Import() {
                     "text/tab-separated-values", 
                     "text/plain", 
                     "text/csv",
+                    "application/gpx+xml",
+                    "application/tcx+xml",
+                    "application/xml",
+                    "text/xml",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    "application/octet-stream",
                     "public.comma-separated-values-text",
+                    "public.xml",
                     "public.text",
-                    "public.data"
+                    "public.data",
+                    ".gpx",
+                    ".xlsx"
                 ],
                 copyToCacheDirectory: true,
             });
@@ -70,10 +224,16 @@ export default function Import() {
             let fileUri = asset.uri;
             
 
+            const isSpreadsheet = /\.xlsx$/i.test(asset.name || fileUri);
             let content = "";
-            
-            // On Web, FileSystem is often undefined or limited. fetch is much more reliable for blobs.
-            if (Platform.OS === "web" || fileUri.startsWith("blob:") || fileUri.startsWith("data:")) {
+
+            if (isSpreadsheet) {
+                const response = await fetch(fileUri);
+                const workbook = XLSX.read(await response.arrayBuffer(), { type: "array" });
+                const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+                if (!firstSheet) throw new Error("The spreadsheet does not contain a worksheet.");
+                content = XLSX.utils.sheet_to_csv(firstSheet);
+            } else if (Platform.OS === "web" || fileUri.startsWith("blob:") || fileUri.startsWith("data:")) {
                 const response = await fetch(fileUri);
                 content = await response.text();
             } else {
@@ -87,7 +247,8 @@ export default function Import() {
             }
             
             if (content) {
-                setImportText(content);
+                setRouteData(content.trim().startsWith("<") ? extractGpxRoute(content) : null);
+                setImportText(normalizeStravaExport(content));
                 setFileName(asset.name);
                 setStatus({ type: "info", title: k("file_loaded"), message: k("file_loaded_message", { name: asset.name }) });
             } else {
@@ -106,6 +267,7 @@ export default function Import() {
     function clearFile() {
         setImportText("");
         setFileName(null);
+        setRouteData(null);
         setStatus(null);
     }
 
@@ -154,7 +316,9 @@ export default function Import() {
             if (!user) throw new Error("User not found");
 
             // Split by lines and filter empty ones
-            const lines = importText.trim().split(/\r?\n/).filter(line => line.trim());
+            const normalizedImport = normalizeStravaExport(importText);
+            const stravaImport = isStravaExport(importText);
+            const lines = normalizedImport.trim().split(/\r?\n/).filter(line => line.trim());
             if (lines.length < 2) throw new Error("Invalid data format");
 
             // Detect separator (Tab or Comma)
@@ -184,6 +348,10 @@ export default function Import() {
                 if (c.includes("distance") || c.includes("distancia")) columnMap["distance_km"] = idx.toString();
                 if (c.includes("duration") || c.includes("seconds") || c.includes("duración") || c.includes("duração")) columnMap["duration_seconds"] = idx.toString();
                 if (c.includes("rpe")) columnMap["rpe"] = idx.toString();
+                if (c.includes("average heart") || c.includes("avg heart")) columnMap["average_heart_rate"] = idx.toString();
+                if (c.includes("max heart")) columnMap["max_heart_rate"] = idx.toString();
+                if (c.includes("average speed") || c.includes("avg speed")) columnMap["average_speed"] = idx.toString();
+                if (c.includes("max speed")) columnMap["max_speed"] = idx.toString();
                 if (c.includes("set index") || c === "index" || c === "set number" || c === "série") columnMap["set_index"] = idx.toString();
                 if (c.includes("set type") || c.includes("tipo")) columnMap["set_type"] = idx.toString();
             });
@@ -215,13 +383,18 @@ export default function Import() {
                 const workoutKey = `${title}_${startTime.getTime()}`;
                 if (!workoutsMap[workoutKey]) {
                     const endTimeStr = getVal(values, "end_time");
+                    const durationSeconds = Number(getVal(values, "duration_seconds")) || 0;
+                    const endTime = stravaImport && durationSeconds > 0
+                        ? new Date(startTime.getTime() + durationSeconds * 1000)
+                        : endTimeStr ? parseDate(endTimeStr) : null;
                     workoutsMap[workoutKey] = {
                         title: title,
                         start_time: startTime,
-                        end_time: endTimeStr ? parseDate(endTimeStr) : null,
+                        end_time: endTime,
                         description: getVal(values, "description") || "",
                         sets: []
                     };
+                    workoutsMap[workoutKey].activityData = {};
                 }
 
                 const rawWeight = getVal(values, "weight");
@@ -246,6 +419,15 @@ export default function Import() {
                     set_index: getVal(values, "set_index"),
                     set_type: getVal(values, "set_type")
                 });
+                const activityData = workoutsMap[workoutKey].activityData;
+                const numberValue = (key: string) => Number(getVal(values, key)) || null;
+                activityData.averageHeartRate = numberValue("average_heart_rate");
+                activityData.maxHeartRate = numberValue("max_heart_rate");
+                activityData.averageSpeed = numberValue("average_speed");
+                activityData.maxSpeed = numberValue("max_speed");
+                activityData.distanceKm = Number(getVal(values, "distance_km")) || null;
+                activityData.durationSeconds = Number(getVal(values, "duration_seconds")) || null;
+                if (routeData) activityData.splits = calculateSplits(routeData);
 
                 // Sanity check: Ensure the exercise name isn't just a misparsed date fragment
                 // (e.g. "Aug 10" or "Sep 20")
@@ -287,17 +469,93 @@ export default function Import() {
             // 2. Check for existing workouts to avoid duplicates (Batched check)
             const allStartTimes = workoutEntries.map(w => w.start_time.toISOString());
             const existingStartTimesSet = new Set<string>();
+            const existingWorkoutIds = new Map<string, string>();
             
             setProgress(`Checking for existing data in batches...`);
             for (let i = 0; i < allStartTimes.length; i += 100) {
                 const batch = allStartTimes.slice(i, i + 100);
                 const { data: existingBatch } = await supabase
                     .from("workouts")
-                    .select("start_time")
+                    .select("id, start_time")
                     .eq("user_id", user.id)
                     .in("start_time", batch);
                 
-                existingBatch?.forEach(w => existingStartTimesSet.add(new Date(w.start_time).toISOString()));
+                existingBatch?.forEach(w => {
+                    const startTime = new Date(w.start_time).toISOString();
+                    existingStartTimesSet.add(startTime);
+                    existingWorkoutIds.set(startTime, w.id);
+                });
+            }
+
+            const importDates = workoutEntries.map((workout) => workout.start_time.getTime());
+            if (stravaImport && importDates.length > 0) {
+                const earliestDate = new Date(Math.min(...importDates));
+                earliestDate.setHours(0, 0, 0, 0);
+                const latestDate = new Date(Math.max(...importDates));
+                latestDate.setHours(23, 59, 59, 999);
+                const { data: sameDayWorkouts, error: sameDayError } = await supabase
+                    .from("workouts")
+                    .select("id, title, start_time")
+                    .eq("user_id", user.id)
+                    .gte("start_time", earliestDate.toISOString())
+                    .lte("start_time", latestDate.toISOString());
+                if (sameDayError) throw sameDayError;
+                if (stravaImport) for (const workout of workoutEntries) {
+                    const isRunningEntry = /run|running|corrida/i.test(workout.title)
+                        || workout.sets.some((set: { exercise_title: string }) => /run|running|corrida/i.test(set.exercise_title));
+                    const candidates = (sameDayWorkouts ?? []).filter((candidate) =>
+                        candidate.start_time.slice(0, 10) === workout.start_time.toISOString().slice(0, 10)
+                        && (!isRunningEntry || /run|running|corrida/i.test(candidate.title)),
+                    );
+                    const exactCandidate = candidates.find((candidate) => candidate.title === workout.title);
+                    const closestCandidate = candidates
+                        .sort((a, b) => Math.abs(new Date(a.start_time).getTime() - workout.start_time.getTime())
+                            - Math.abs(new Date(b.start_time).getTime() - workout.start_time.getTime()))[0];
+                    const existingId = (exactCandidate ?? closestCandidate)?.id;
+                    if (existingId) existingWorkoutIds.set(workout.start_time.toISOString(), existingId);
+                }
+            }
+
+            if (stravaImport && routeData && workoutEntries.length === 1) {
+                const existingId = existingWorkoutIds.get(workoutEntries[0].start_time.toISOString());
+                if (existingId) {
+                    const { error: routeUpdateError } = await supabase
+                        .from("workouts")
+                        .update({ route_data: routeData })
+                        .eq("id", existingId)
+                        .eq("user_id", user.id);
+                    if (routeUpdateError) throw routeUpdateError;
+                }
+            }
+
+            for (const workout of workoutEntries) {
+                    const existingId = existingWorkoutIds.get(workout.start_time.toISOString());
+                    if (!existingId) continue;
+
+                    const workoutUpdates: Record<string, unknown> = {
+                        title: workout.title,
+                        start_time: workout.start_time.toISOString(),
+                        end_time: workout.end_time?.toISOString() ?? null,
+                        description: workout.description,
+                    };
+                    if (routeData) workoutUpdates.route_data = routeData;
+                    workoutUpdates.activity_data = workout.activityData;
+                    const { error: workoutUpdateError } = await supabase
+                        .from("workouts")
+                        .update(workoutUpdates)
+                        .eq("id", existingId)
+                        .eq("user_id", user.id);
+                    if (workoutUpdateError) throw workoutUpdateError;
+
+                    const runningSet = workout.sets[0];
+                    const { error: setUpdateError } = await supabase
+                        .from("sets")
+                        .update({
+                            distance_km: parseFloat(runningSet.distance_km) || null,
+                            duration_s: parseInt(runningSet.duration_seconds) || null,
+                        })
+                        .eq("workout_id", existingId);
+                    if (setUpdateError) throw setUpdateError;
             }
             
             // Filter out workouts that are already in the database
@@ -325,7 +583,8 @@ export default function Import() {
                             title: workout.title,
                             start_time: workout.start_time.toISOString(),
                             end_time: workout.end_time ? workout.end_time.toISOString() : null,
-                            description: workout.description
+                            description: workout.description,
+                            ...(stravaImport ? { route_data: routeData, activity_data: workout.activityData } : {}),
                         })
                         .select("id")
                         .single();
@@ -451,7 +710,8 @@ export default function Import() {
             // Fall through to native Date
         }
 
-        const nativeDate = new Date(cleanStr);
+        const normalizedDate = cleanStr.replace(/^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})$/, "$1T$2");
+        const nativeDate = new Date(normalizedDate);
         return nativeDate;
     }
 
@@ -479,6 +739,19 @@ export default function Import() {
     const statusIcon = status?.type === "success" ? "checkmark-circle" : status?.type === "error" ? "alert-circle" : "information-circle";
     const canImport = !!importText.trim() && !loading;
 
+    function openExportGuide(url: string) {
+        const openRequest = Platform.OS === "web"
+            ? Promise.resolve().then(() => {
+                const newWindow = window.open(url, "_blank", "noopener,noreferrer");
+                if (!newWindow) throw new Error("The browser blocked the new tab.");
+            })
+            : Linking.openURL(url);
+        openRequest.catch((error) => {
+            console.error("Could not open export guide:", error);
+            setStatus({ type: "error", title: k("error"), message: k("guide_error") });
+        });
+    }
+
     return (
         <View style={[styles.container, { backgroundColor: colors.background }]}>
             {/* Header */}
@@ -505,6 +778,20 @@ export default function Import() {
                             <Text style={[styles.stepText, { color: colors.text }]}>{step}</Text>
                         </View>
                     ))}
+                </View>
+                <View style={[styles.exportLinksCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                    <Text style={[styles.exportLinksTitle, { color: colors.text }]}>{k("export_links_title")}</Text>
+                    <Text style={[styles.exportLinksDescription, { color: colors.secondaryText }]}>{k("export_links_description")}</Text>
+                    <Pressable onPress={() => openExportGuide("https://hevy.com/settings?export")} style={({ pressed }) => [styles.exportLink, { borderColor: colors.border, opacity: pressed ? 0.7 : 1 }]}>
+                        <Ionicons name="barbell-outline" size={18} color={colors.tint} />
+                        <Text style={[styles.exportLinkText, { color: colors.tint }]}>{k("hevy_export_link")}</Text>
+                        <Ionicons name="open-outline" size={16} color={colors.secondaryText} />
+                    </Pressable>
+                    <Pressable onPress={() => openExportGuide("https://entorb.net/strava-streamlit/r10_activity_list_and_excel_export")} style={({ pressed }) => [styles.exportLink, { borderColor: colors.border, opacity: pressed ? 0.7 : 1 }]}>
+                        <Ionicons name="navigate-outline" size={18} color={colors.tint} />
+                        <Text style={[styles.exportLinkText, { color: colors.tint }]}>{k("strava_export_link")}</Text>
+                        <Ionicons name="open-outline" size={16} color={colors.secondaryText} />
+                    </Pressable>
                 </View>
 
                 {/* File picker */}
@@ -677,6 +964,11 @@ const styles = StyleSheet.create({
     stepNum: { width: 26, height: 26, borderRadius: 8, justifyContent: "center", alignItems: "center" },
     stepNumText: { fontSize: 12, fontWeight: "900", fontFamily: "System" },
     stepText: { flex: 1, fontSize: 14, fontWeight: "600", lineHeight: 20, fontFamily: "System" },
+    exportLinksCard: { borderWidth: 1, borderRadius: 16, padding: 16, marginTop: 16, marginBottom: 28 },
+    exportLinksTitle: { fontSize: 15, fontWeight: "800", marginBottom: 4 },
+    exportLinksDescription: { fontSize: 13, lineHeight: 19, marginBottom: 12 },
+    exportLink: { flexDirection: "row", alignItems: "center", gap: 10, borderTopWidth: 1, paddingVertical: 13 },
+    exportLinkText: { flex: 1, fontSize: 14, fontWeight: "700" },
 
     // File picker
     dropZone: {

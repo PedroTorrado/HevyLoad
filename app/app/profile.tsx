@@ -505,7 +505,6 @@ const styles = StyleSheet.create({
     choiceContainer: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginBottom: 28 },
     choiceBtn: { flex: 1, minWidth: 100, paddingVertical: 12, alignItems: "center", borderRadius: 12, borderWidth: 1 },
     choiceBtnText: { fontSize: 14, fontWeight: "600" },
-
     signOutBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 16, marginTop: 4 },
     signOutText: { fontSize: 16, fontWeight: "600" },
 });
